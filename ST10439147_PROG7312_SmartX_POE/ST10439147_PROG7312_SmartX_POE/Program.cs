@@ -6,6 +6,7 @@ using SmartX.Api.Services;
 using SmartX.Shared;
 using SmartX.Shared.Classes.Telemetry;
 using SmartX.Shared.Classes.Topology;
+using SmartX.Shared.Topology;
 using System.ComponentModel.DataAnnotations;
 using System.Text.Json.Serialization;
 
@@ -65,7 +66,7 @@ api.MapGet("/sensors/{id}/profile", (string id, TelemetryStore store) =>
     store.TryGet(id, out var sensor) ? Results.Ok(sensor) : Results.NotFound());
 
 api.MapPost("/sensors", async (
-    SensorRegistration registration,
+    SensorReg registration,
     TelemetryStore store,
     IHubContext<TelemetryHub> hub) =>
 {
@@ -107,9 +108,9 @@ api.MapGet("/sensors/{id}/history", (string id, TelemetryStore store, [FromQuery
 
     return sensor.Payload switch
     {
-        PayloadKind.Float => Results.Ok(store.Floats(id)?.TakeLast(samples) ?? []),
-        PayloadKind.Integer => Results.Ok(store.Integers(id)?.TakeLast(samples) ?? []),
-        PayloadKind.Boolean => Results.Ok(store.Booleans(id)?.TakeLast(samples) ?? []),
+        payloadKind.Float => Results.Ok(store.Floats(id)?.TakeLast(samples) ?? []),
+        payloadKind.Integer => Results.Ok(store.Integers(id)?.TakeLast(samples) ?? []),
+        payloadKind.Boolean => Results.Ok(store.Booleans(id)?.TakeLast(samples) ?? []),
         _ => Results.NotFound()
     };
 });
@@ -142,7 +143,7 @@ api.MapGet("/telemetry/aggregate", ([FromQuery] string a, [FromQuery] string b, 
     if (!store.TryGet(a, out var left) || !store.TryGet(b, out var right))
         return Results.NotFound(new { message = "Both sensor ids must be registered." });
 
-    if (left.Payload == PayloadKind.Boolean || right.Payload == PayloadKind.Boolean)
+    if (left.Payload == payloadKind.Boolean || right.Payload == payloadKind.Boolean)
         return Results.BadRequest(new { message = "Actuator states are not numeric and cannot be aggregated." });
 
     var readingA = new SensorReading<double>(left.Id, store.LatestNumeric(left.Id));
