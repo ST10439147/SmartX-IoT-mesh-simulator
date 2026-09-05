@@ -6,11 +6,4 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
-  <ItemGroup>
-    <Folder Include="Classes\Collections\" />
-    <Folder Include="Classes\Diagnostics\" />
-    <Folder Include="Classes\Ingestion\" />
-    <Folder Include="Classes\Topology\" />
-  </ItemGroup>
-
 </Project>
