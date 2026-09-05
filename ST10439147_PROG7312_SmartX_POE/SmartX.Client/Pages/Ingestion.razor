@@ -295,7 +295,7 @@
 @code {
     private readonly CancellationTokenSource _cts = new();
 
-    private SensorRegistration _model = NewModel();
+    private SensorReg _model = NewModel();
     private IReadOnlyList<SensorSnapshot> _sensors = [];
     private DeploymentNode? _topology;
     private List<string> _paths = [];
@@ -460,10 +460,10 @@
         _validating = false;
     }
 
-    private static SensorRegistration NewModel() => new()
+    private static SensorReg NewModel() => new()
     {
         Category = SensorCategory.Environmental,
-        Payload = PayloadKind.Float,
+        Payload = payloadKind.Float,
         PublishIntervalSeconds = 2,
         WarningThreshold = 80
     };
@@ -475,10 +475,10 @@
         _ => "Environmental"
     };
 
-    private static string PayloadLabel(PayloadKind payload) => payload switch
+    private static string PayloadLabel(payloadKind payload) => payload switch
     {
-        PayloadKind.Float => "float - continuous reading",
-        PayloadKind.Integer => "int - discrete metric",
+        payloadKind.Float => "float - continuous reading",
+        payloadKind.Integer => "int - discrete metric",
         _ => "bool - on/off state"
     };
 
