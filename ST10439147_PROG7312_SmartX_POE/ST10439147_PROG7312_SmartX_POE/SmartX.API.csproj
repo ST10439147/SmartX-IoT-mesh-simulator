@@ -11,11 +11,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Folder Include="Hubs\" />
-    <Folder Include="Security\" />
-  </ItemGroup>
-
-  <ItemGroup>
     <ProjectReference Include="..\SmartX.Shared\SmartX.Shared.csproj" />
   </ItemGroup>
 
