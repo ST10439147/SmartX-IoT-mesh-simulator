@@ -1,0 +1,497 @@
+﻿@page "/ingestion"
+@implements IDisposable
+@inject Services.GatewayClient Gateway
+@using SmartX.Shared.Topology
+
+<PageTitle>Ingestion - Smart-X Gateway</PageTitle>
+
+<div class="page-head">
+    <h1>Sensor registration &amp; payload management</h1>
+    <p>
+        Register a node against the deployment tree, then attach its configuration files, hardware
+        logs or deployment photos. Validation runs in the browser for the feedback loop and again on
+        the gateway, because a direct POST never sees this form at all.
+    </p>
+</div>
+
+<div class="split">
+
+    @* ------------------------------------------------------------ registration *@
+    <div class="panel">
+        <div class="panel-head">
+            <h2>Register a mesh node</h2>
+            <span class="count">POST /api/sensors</span>
+        </div>
+
+        @if (_registerToast is not null)
+        {
+            <div class="toast @_registerToastClass">
+                <span>@_registerToast</span>
+            </div>
+        }
+
+        @if (_serverErrors.Count > 0)
+        {
+            <div class="toast bad">
+                <div>
+                    <strong>The gateway rejected this registration:</strong>
+                    <ul class="list" style="margin-top:.4rem">
+                        @foreach (var (field, messages) in _serverErrors)
+                        {
+                            foreach (var message in messages)
+                            {
+                                <li><span class="tag crit">@field</span><span class="grow">@message</span></li>
+                            }
+                        }
+                    </ul>
+                </div>
+            </div>
+        }
+
+        <EditForm Model="_model" OnValidSubmit="SubmitAsync" FormName="register-sensor">
+            <DataAnnotationsValidator />
+
+            <div class="form-grid">
+                <div class="field">
+                    <label for="mac">Device MAC address</label>
+                    <InputText id="mac" @bind-Value="_model.MacAddress" placeholder="A4:CF:12:9B:04:7E" autocomplete="off" />
+                    <ValidationMessage For="() => _model.MacAddress" class="field-error" />
+                </div>
+
+                <div class="field">
+                    <label for="name">Display name</label>
+                    <InputText id="name" @bind-Value="_model.DisplayName" placeholder="Soil Probe East" autocomplete="off" />
+                    <ValidationMessage For="() => _model.DisplayName" class="field-error" />
+                </div>
+
+                <div class="field">
+                    <label for="path">Deployment location</label>
+                    <InputSelect id="path" @bind-Value="_model.DeploymentPath">
+                        <option value="">Select a zone...</option>
+                        @foreach (var path in _paths)
+                        {
+                            <option value="@path">@path</option>
+                        }
+                    </InputSelect>
+                    <span class="hint">Validated recursively against the deployment tree.</span>
+                    <ValidationMessage For="() => _model.DeploymentPath" class="field-error" />
+                </div>
+
+                <div class="field">
+                    <label for="category">Sensor category</label>
+                    <InputSelect id="category" @bind-Value="_model.Category">
+                        @foreach (var category in Enum.GetValues<SensorCategory>())
+                        {
+                            <option value="@category">@Humanise(category)</option>
+                        }
+                    </InputSelect>
+                </div>
+
+                <div class="field">
+                    <label for="payload">Payload type</label>
+                    <InputSelect id="payload" @bind-Value="_model.Payload">
+                        @foreach (var payload in Enum.GetValues<payloadKind>())
+                        {
+                            <option value="@payload">@PayloadLabel(payload)</option>
+                        }
+                    </InputSelect>
+                    <span class="hint">Picks which typed ring buffer this node writes into.</span>
+                </div>
+
+                <div class="field">
+                    <label for="interval">Publish interval (seconds)</label>
+                    <InputNumber id="interval" @bind-Value="_model.PublishIntervalSeconds" />
+                    <span class="hint">Three missed intervals raises a silence alert.</span>
+                    <ValidationMessage For="() => _model.PublishIntervalSeconds" class="field-error" />
+                </div>
+
+                <div class="field">
+                    <label for="threshold">Warning threshold</label>
+                    <InputNumber id="threshold" @bind-Value="_model.WarningThreshold" />
+                    <ValidationMessage For="() => _model.WarningThreshold" class="field-error" />
+                </div>
+
+                <div class="field">
+                    <label for="unit">Unit (optional)</label>
+                    <InputText id="unit" @bind-Value="_model.Unit" placeholder="@_model.DefaultUnit()" autocomplete="off" />
+                    <span class="hint">Blank falls back to @(string.IsNullOrEmpty(_model.DefaultUnit()) ? "no unit" : _model.DefaultUnit()) for this category.</span>
+                    <ValidationMessage For="() => _model.Unit" class="field-error" />
+                </div>
+            </div>
+
+            <div class="actions">
+                <button type="submit" class="primary" disabled="@_submitting">
+                    @(_submitting ? "Registering..." : "Register node")
+                </button>
+                <button type="button" class="ghost" @onclick="ResetForm" disabled="@_submitting">Clear</button>
+            </div>
+        </EditForm>
+    </div>
+
+    @* ------------------------------------------------------------ attachments *@
+    <div class="panel">
+        <div class="panel-head">
+            <h2>Media &amp; log attachments</h2>
+            <span class="count">multipart &rarr; AES-256-GCM</span>
+        </div>
+
+        @if (_sensors.Count == 0)
+        {
+            <div class="empty-rail">No nodes registered yet.</div>
+        }
+        else
+        {
+            <div class="field">
+                <label for="target">Attach to sensor profile</label>
+                <select id="target" value="@_attachTarget" @onchange="OnTargetChanged">
+                    @foreach (var sensor in _sensors)
+                    {
+                        <option value="@sensor.Id">@sensor.DisplayName &mdash; @sensor.DeploymentPath</option>
+                    }
+                </select>
+            </div>
+
+            <div class="dropzone" style="margin-top:.8rem">
+                <div>Device config, hardware log or deployment photo</div>
+                <span class="hint">png, jpg, gif, pdf, log, txt, json, cfg, csv, yaml &mdash; up to 25 MB</span>
+                <InputFile OnChange="OnFileChosen" accept=".png,.jpg,.jpeg,.gif,.pdf,.log,.txt,.json,.cfg,.conf,.ini,.csv,.yaml,.yml,.md" />
+            </div>
+
+            @if (_chosen is not null)
+            {
+                <div class="toast busy" style="margin-top:.8rem">
+                    <span class="grow">@_chosen.Name &mdash; @Bytes(_chosen.Size)</span>
+                    <button class="primary tiny" @onclick="UploadAsync" disabled="@_uploading">
+                        @(_uploading ? "Streaming..." : "Upload")
+                    </button>
+                </div>
+            }
+
+            @if (_uploadToast is not null)
+            {
+                <div class="toast @_uploadToastClass">
+                    <span>@_uploadToast</span>
+                </div>
+            }
+
+            @if (_attachments.Count > 0)
+            {
+                <h3 style="margin-top:1rem">Stored on this profile</h3>
+                <ul class="list">
+                    @foreach (var attachment in _attachments)
+                    {
+                        <li>
+                            <span class="tag ok">@attachment.DetectedType</span>
+                            <span class="grow">@attachment.FileName</span>
+                            <span class="meta">@Bytes(attachment.PlaintextBytes) &rarr; @Bytes(attachment.StoredBytes) sealed</span>
+                            <a href="@Gateway.DownloadUrl(attachment)" target="_blank" rel="noopener">
+                                <button class="tiny">Download</button>
+                            </a>
+                        </li>
+                    }
+                </ul>
+                <p class="hint" style="margin-top:.5rem">
+                    SHA-256 of the last upload: <code>@_attachments[^1].Sha256[..16]</code>&hellip;
+                </p>
+            }
+        }
+    </div>
+</div>
+
+@* ------------------------------------------------------------ topology + registry *@
+<div class="split" style="margin-top:1rem">
+    <div class="panel">
+        <div class="panel-head">
+            <h2>Deployment tree</h2>
+            <span class="count">recursive validation</span>
+        </div>
+
+        @if (_topology is null)
+        {
+            <div class="empty-rail">Loading the deployment hierarchy...</div>
+        }
+        else
+        {
+            <ul class="tree">
+                <li>
+                    <span class="tag ok">facility</span>
+                    <span class="tree-name">@_topology.Name</span>
+                    <TopologyTree Node="_topology" />
+                </li>
+            </ul>
+
+            <div class="actions">
+                <button @onclick="ValidateTreeAsync" disabled="@_validating">Validate tree</button>
+                <button class="ghost" @onclick="StressAsync" disabled="@_validating">Stress the depth guard</button>
+            </div>
+
+            @if (_report is not null)
+            {
+                <div class="toast @(_report.IsValid ? "ok" : "bad")">
+                    <span>
+                        @_report.NodesVisited nodes visited, deepest tier @_report.MaxDepthReached,
+                        @_report.Issues.Count issue(s).
+                        @(_report.IsValid ? "Tree is safely configured." : "Tree has errors.")
+                    </span>
+                </div>
+
+                @if (_report.Issues.Count > 0)
+                {
+                    <ul class="list">
+                        @foreach (var issue in _report.Issues.Take(8))
+                        {
+                            <li>
+                                <span class="tag @(issue.Severity == IssueSeverity.Error ? "crit" : "warn")">@issue.Severity</span>
+                                <span class="grow"><code>@issue.Path</code> &mdash; @issue.Message</span>
+                            </li>
+                        }
+                    </ul>
+                }
+            }
+
+            @if (_stress is not null)
+            {
+                <div class="toast ok">
+                    <span>
+                        Sent a @_stress.RequestedDepth.ToString("N0")-tier tree at the validator.
+                        It stopped at depth @_stress.MaxDepthReached (ceiling @_stress.Ceiling) and returned
+                        an error instead of overflowing the stack.
+                    </span>
+                </div>
+            }
+        }
+    </div>
+
+    <div class="panel">
+        <div class="panel-head">
+            <h2>Registered nodes</h2>
+            <span class="count">@_sensors.Count on the mesh</span>
+        </div>
+
+        @if (_sensors.Count == 0)
+        {
+            <div class="empty-rail">Nothing registered yet.</div>
+        }
+        else
+        {
+            <ul class="list">
+                @foreach (var sensor in _sensors)
+                {
+                    <li>
+                        <span class="tag @(sensor.IsSilent ? "crit" : "ok")">@(sensor.IsSilent ? "silent" : "live")</span>
+                        <span class="grow">
+                            @sensor.DisplayName
+                            <span class="meta">@sensor.MacAddress &middot; @sensor.DeploymentPath</span>
+                        </span>
+                        <span class="meta">@sensor.PacketsReceived.ToString("N0") pkts</span>
+                        <button class="danger tiny" @onclick="() => DeleteAsync(sensor.Id)">Remove</button>
+                    </li>
+                }
+            </ul>
+        }
+    </div>
+</div>
+
+@code {
+    private readonly CancellationTokenSource _cts = new();
+
+    private SensorRegistration _model = NewModel();
+    private IReadOnlyList<SensorSnapshot> _sensors = [];
+    private DeploymentNode? _topology;
+    private List<string> _paths = [];
+
+    private IDictionary<string, string[]> _serverErrors = new Dictionary<string, string[]>();
+    private string? _registerToast;
+    private string _registerToastClass = "ok";
+    private bool _submitting;
+
+    private string _attachTarget = string.Empty;
+    private IBrowserFile? _chosen;
+    private IReadOnlyList<AttachmentInfo> _attachments = [];
+    private string? _uploadToast;
+    private string _uploadToastClass = "ok";
+    private bool _uploading;
+
+    private TopologyReport? _report;
+    private StressResult? _stress;
+    private bool _validating;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _topology = await Gateway.GetTopologyAsync(_cts.Token);
+        if (_topology is not null) _paths = FlattenPaths(_topology, _topology.Name);
+
+        await RefreshSensorsAsync();
+    }
+
+    private async Task RefreshSensorsAsync()
+    {
+        _sensors = await Gateway.GetSensorsAsync(_cts.Token);
+
+        if (_sensors.Count > 0 && !_sensors.Any(s => s.Id == _attachTarget))
+        {
+            _attachTarget = _sensors[0].Id;
+            await LoadAttachmentsAsync();
+        }
+    }
+
+    /// <summary>Walks the tree and yields every addressable breadcrumb path - recursion again, one frame per tier.</summary>
+    private static List<string> FlattenPaths(DeploymentNode node, string prefix, int depth = 0)
+    {
+        var paths = new List<string>();
+        if (depth > TopologyValidator.MaxDepth) return paths;
+
+        foreach (var child in node.Children)
+        {
+            var path = $"{prefix}/{child.Name}";
+            paths.Add(path);
+            paths.AddRange(FlattenPaths(child, path, depth + 1));
+        }
+
+        return paths;
+    }
+
+    private async Task SubmitAsync()
+    {
+        _submitting = true;
+        _serverErrors = new Dictionary<string, string[]>();
+        _registerToast = null;
+
+        var outcome = await Gateway.RegisterAsync(_model, _cts.Token);
+
+        if (outcome.Ok)
+        {
+            _registerToast = $"{outcome.Snapshot?.DisplayName} registered at {outcome.Snapshot?.DeploymentPath}. It will start publishing on the next cycle.";
+            _registerToastClass = "ok";
+            _model = NewModel();
+            await RefreshSensorsAsync();
+        }
+        else
+        {
+            _serverErrors = outcome.Errors;
+        }
+
+        _submitting = false;
+    }
+
+    private void ResetForm()
+    {
+        _model = NewModel();
+        _serverErrors = new Dictionary<string, string[]>();
+        _registerToast = null;
+    }
+
+    private async Task DeleteAsync(string id)
+    {
+        if (await Gateway.DeleteSensorAsync(id, _cts.Token))
+        {
+            _registerToast = "Node removed from the mesh registry.";
+            _registerToastClass = "ok";
+            await RefreshSensorsAsync();
+        }
+    }
+
+    private async Task OnTargetChanged(ChangeEventArgs args)
+    {
+        _attachTarget = args.Value?.ToString() ?? string.Empty;
+        _uploadToast = null;
+        await LoadAttachmentsAsync();
+    }
+
+    private async Task LoadAttachmentsAsync()
+    {
+        if (string.IsNullOrEmpty(_attachTarget)) return;
+        _attachments = await Gateway.GetAttachmentsAsync(_attachTarget, _cts.Token);
+    }
+
+    private void OnFileChosen(InputFileChangeEventArgs args)
+    {
+        _chosen = args.File;
+        _uploadToast = null;
+
+        if (_chosen.Size > GatewayClient.MaxUploadBytes)
+        {
+            _uploadToast = $"{_chosen.Name} is {Bytes(_chosen.Size)}, over the 25 MB ceiling. Nothing was sent.";
+            _uploadToastClass = "bad";
+            _chosen = null;
+        }
+    }
+
+    private async Task UploadAsync()
+    {
+        if (_chosen is null) return;
+
+        _uploading = true;
+        _uploadToast = null;
+
+        var (ok, attachment, error) = await Gateway.UploadAsync(_attachTarget, _chosen, _cts.Token);
+
+        if (ok && attachment is not null)
+        {
+            _uploadToast = $"{attachment.FileName} verified as {attachment.DetectedType}, sealed to {Bytes(attachment.StoredBytes)} on disk.";
+            _uploadToastClass = "ok";
+            _chosen = null;
+            await LoadAttachmentsAsync();
+        }
+        else
+        {
+            _uploadToast = error ?? "The gateway refused the attachment.";
+            _uploadToastClass = "bad";
+        }
+
+        _uploading = false;
+    }
+
+    private async Task ValidateTreeAsync()
+    {
+        if (_topology is null) return;
+
+        _validating = true;
+        _stress = null;
+        _report = await Gateway.ValidateTopologyAsync(_topology, _cts.Token);
+        _validating = false;
+    }
+
+    private async Task StressAsync()
+    {
+        _validating = true;
+        _report = null;
+        _stress = await Gateway.StressTopologyAsync(50_000, _cts.Token);
+        _validating = false;
+    }
+
+    private static SensorRegistration NewModel() => new()
+    {
+        Category = SensorCategory.Environmental,
+        Payload = PayloadKind.Float,
+        PublishIntervalSeconds = 2,
+        WarningThreshold = 80
+    };
+
+    private static string Humanise(SensorCategory category) => category switch
+    {
+        SensorCategory.PowerConsumption => "Power consumption",
+        SensorCategory.Actuator => "Actuator",
+        _ => "Environmental"
+    };
+
+    private static string PayloadLabel(PayloadKind payload) => payload switch
+    {
+        PayloadKind.Float => "float - continuous reading",
+        PayloadKind.Integer => "int - discrete metric",
+        _ => "bool - on/off state"
+    };
+
+    private static string Bytes(long bytes) => bytes switch
+    {
+        < 1024 => $"{bytes} B",
+        < 1024 * 1024 => $"{bytes / 1024d:0.#} KB",
+        _ => $"{bytes / (1024d * 1024d):0.##} MB"
+    };
+
+    public void Dispose()
+    {
+        _cts.Cancel();
+        _cts.Dispose();
+    }
+}
