@@ -1,0 +1,469 @@
+@page "/dashboard"
+@using Microsoft.AspNetCore.SignalR.Client
+@using Microsoft.Extensions.DependencyInjection
+@implements IAsyncDisposable
+@inject GatewayClient Gateway
+
+<PageTitle>Live dashboard - Smart-X Gateway</PageTitle>
+
+<div class="page-head">
+    <h1>Anomaly-first telemetry console</h1>
+    <p>
+        Deviation gets colour and position; everything behaving normally is drawn in one muted hue.
+        Packets arrive over a push connection rather than a poll, so a two-second spike is visible
+        instead of being averaged away by a refresh interval.
+    </p>
+</div>
+
+@if (_status is not null)
+{
+    <div class="stats" style="margin-bottom:1rem">
+        <div class="stat">
+            <div class="label">Connection</div>
+            <div class="value @(_connected ? "ok" : "crit")" style="font-size:1rem">@_connectionLabel</div>
+        </div>
+        <div class="stat">
+            <div class="label">Nodes</div>
+            <div class="value">@_status.SensorsRegistered</div>
+        </div>
+        <div class="stat">
+            <div class="label">Silent</div>
+            <div class="value @(_status.SensorsSilent > 0 ? "warn" : "ok")">@_status.SensorsSilent</div>
+        </div>
+        <div class="stat">
+            <div class="label">Throughput</div>
+            <div class="value">@_status.PacketsPerSecond.ToString("0.0")/s</div>
+        </div>
+        <div class="stat">
+            <div class="label">Open alerts</div>
+            <div class="value @(_status.ActiveAlerts > 0 ? "crit" : "ok")">@_status.ActiveAlerts</div>
+        </div>
+        <div class="stat">
+            <div class="label">Suppressed</div>
+            <div class="value">@_status.SuppressedAlerts</div>
+        </div>
+    </div>
+}
+
+<div class="dash">
+
+    @* ------------------------------------------------------------ severity-ranked rail *@
+    <section class="panel">
+        <div class="panel-head">
+            <h2>Alert rail</h2>
+            <span class="count">@_active.Count open</span>
+        </div>
+
+        <div class="rail">
+            @if (_active.Count == 0)
+            {
+                <div class="empty-rail">
+                    <div>
+                        <div style="font-size:1.6rem">&#9678;</div>
+                        Nothing needs attention.<br />
+                        <span class="hint">Spikes and disconnects appear here, worst first.</span>
+                    </div>
+                </div>
+            }
+
+            @foreach (var alert in _active)
+            {
+                <button class="alert @SeverityClass(alert.Severity) @(alert.Id == _selectedAlert?.Id ? "sel" : "")"
+                        @onclick="() => SelectAlert(alert)">
+                    <div class="row">
+                        <span class="tag @SeverityClass(alert.Severity)">@alert.Kind</span>
+                        <span class="who">@alert.SensorName</span>
+                        <span class="when">@Ago(alert.RaisedAt)</span>
+                    </div>
+                    <div class="what">@alert.Message</div>
+                </button>
+            }
+
+            @if (_suppressed.Count > 0)
+            {
+                <details class="suppressed-group">
+                    <summary>
+                        @_suppressed.Count suppressed alert(s) &mdash; repeatedly dismissed, kept for audit
+                    </summary>
+                    <div class="list-inner">
+                        @foreach (var alert in _suppressed)
+                        {
+                            <button class="alert" @onclick="() => SelectAlert(alert)">
+                                <div class="row">
+                                    <span class="tag">@alert.Kind</span>
+                                    <span class="who">@alert.SensorName</span>
+                                    <span class="when">@Ago(alert.RaisedAt)</span>
+                                </div>
+                                <div class="what">@alert.Message</div>
+                            </button>
+                        }
+                    </div>
+                </details>
+            }
+        </div>
+    </section>
+
+    @* ------------------------------------------------------------ small-multiple grid *@
+    <section class="panel">
+        <div class="panel-head">
+            <h2>Mesh</h2>
+            <span class="count">@_snapshots.Count nodes &middot; shared scale per tile</span>
+        </div>
+
+        <div class="sensor-grid">
+            @foreach (var sensor in _snapshots)
+            {
+                <button class="tile @TileClass(sensor)" @onclick="() => SelectSensor(sensor)">
+                    <div class="name">@sensor.DisplayName</div>
+                    <div class="path">@sensor.DeploymentPath</div>
+                    <div class="reading">
+                        @Reading(sensor)<span class="unit">@sensor.Unit</span>
+                    </div>
+                    <Sparkline Values="sensor.Spark"
+                               Stroke="@(Flagged(sensor) ? "var(--crit)" : "var(--normal)")"
+                               Label="@($"{sensor.DisplayName} recent readings")" />
+                </button>
+            }
+        </div>
+    </section>
+</div>
+
+@* ------------------------------------------------------------ drill-down inspector *@
+@if (_selectedSensor is not null)
+{
+    <section class="panel inspector">
+        <div class="panel-head">
+            <h2>Inspector &mdash; @_selectedSensor.DisplayName</h2>
+            @if (_selectedAlert is not null)
+            {
+                <span class="tag @SeverityClass(_selectedAlert.Severity)">@_selectedAlert.Severity</span>
+            }
+            <span class="count">@_selectedSensor.MacAddress</span>
+        </div>
+
+        <div class="split">
+            <div>
+                <dl class="kv">
+                    <dt>Deployment</dt><dd>@_selectedSensor.DeploymentPath</dd>
+                    <dt>Category</dt><dd>@_selectedSensor.Category</dd>
+                    <dt>Payload</dt><dd>TelemetryPacket&lt;@PayloadType(_selectedSensor.Payload)&gt;</dd>
+                    <dt>Latest</dt><dd>@Reading(_selectedSensor)@_selectedSensor.Unit</dd>
+                    <dt>Baseline</dt><dd>@_selectedSensor.Baseline.ToString("0.##")@_selectedSensor.Unit</dd>
+                    <dt>Packets</dt><dd>@_selectedSensor.PacketsReceived.ToString("N0")</dd>
+                    <dt>Last seen</dt><dd>@(_selectedSensor.LastSeen is null ? "never" : Ago(_selectedSensor.LastSeen.Value))</dd>
+
+                    @if (_selectedAlert is not null)
+                    {
+                        <dt>Rule fired</dt><dd>@_selectedAlert.Rule</dd>
+                        <dt>Expected</dt><dd>@_selectedAlert.Baseline.ToString("0.##")</dd>
+                        <dt>Observed</dt><dd>@_selectedAlert.Observed.ToString("0.##")</dd>
+                        <dt>Deviation</dt><dd>@_selectedAlert.Deviation.ToString("0.##")</dd>
+                    }
+                </dl>
+
+                @if (_selectedAlert is not null)
+                {
+                    <div class="actions">
+                        <button class="danger" @onclick="() => DismissAsync(_selectedAlert)">Dismiss this alert</button>
+                        <button class="ghost" @onclick="() => RestoreAsync(_selectedAlert)">Un-suppress this kind</button>
+                    </div>
+                    <p class="hint" style="margin-top:.4rem">
+                        Dismissing @AnomalyDismissalsToSuppress times suppresses this kind for this node.
+                        Suppressed alerts still fire &mdash; they collapse into the audit group rather than disappearing.
+                    </p>
+                }
+            </div>
+
+            <div>
+                <h3>Packets around the event</h3>
+                @if (_selectedAlert is { Context.Count: > 0 })
+                {
+                    <div class="scroll-x">
+                        <table class="context-table">
+                            <thead>
+                                <tr><th>timestamp</th><th>value</th><th></th></tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var sample in _selectedAlert.Context)
+                                {
+                                    <tr class="@(sample.IsOffending ? "offending" : "")">
+                                        <td>@sample.At.ToLocalTime().ToString("HH:mm:ss.fff")</td>
+                                        <td>@sample.Value.ToString("0.###")</td>
+                                        <td>@(sample.IsOffending ? "offending" : "")</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+                else
+                {
+                    <p class="hint">Select an alert from the rail to see the packets either side of it.</p>
+                }
+            </div>
+        </div>
+    </section>
+}
+
+@* ------------------------------------------------------------ operator overloading *@
+<section class="panel inspector">
+    <div class="panel-head">
+        <h2>Aggregate two meters</h2>
+        <span class="count">Meter3 = Meter1 + Meter2</span>
+    </div>
+
+    <p>
+        Combined load is computed with an overloaded <code>+</code> on
+        <code>SensorReading&lt;T&gt;</code>, and the comparison below with an overloaded
+        <code>&gt;</code>. No helper methods, no unwrapping to raw doubles first.
+    </p>
+
+    <div class="form-grid">
+        <div class="field">
+            <label for="meter-a">Meter 1</label>
+            <select id="meter-a" value="@_aggregateA" @onchange="e => OnAggregateChanged(e, true)">
+                @foreach (var sensor in _numeric)
+                {
+                    <option value="@sensor.Id">@sensor.DisplayName</option>
+                }
+            </select>
+        </div>
+        <div class="field">
+            <label for="meter-b">Meter 2</label>
+            <select id="meter-b" value="@_aggregateB" @onchange="e => OnAggregateChanged(e, false)">
+                @foreach (var sensor in _numeric)
+                {
+                    <option value="@sensor.Id">@sensor.DisplayName</option>
+                }
+            </select>
+        </div>
+    </div>
+
+    <div class="actions">
+        <button @onclick="AggregateAsync" disabled="@(_numeric.Count < 2)">Compute</button>
+    </div>
+
+    @if (_aggregate is not null)
+    {
+        <div class="stats" style="margin-top:.8rem">
+            <div class="stat">
+                <div class="label">@_aggregate.Left.DisplayName</div>
+                <div class="value">@_aggregate.Left.Value.ToString("0.##")@_aggregate.Left.Unit</div>
+            </div>
+            <div class="stat">
+                <div class="label">@_aggregate.Right.DisplayName</div>
+                <div class="value">@_aggregate.Right.Value.ToString("0.##")@_aggregate.Right.Unit</div>
+            </div>
+            <div class="stat">
+                <div class="label">Combined (a + b)</div>
+                <div class="value ok">@_aggregate.Aggregate.Value.ToString("0.##")</div>
+            </div>
+            <div class="stat">
+                <div class="label">Delta (a - b)</div>
+                <div class="value">@_aggregate.Delta.Value.ToString("0.##")</div>
+            </div>
+            <div class="stat">
+                <div class="label">a &gt; b</div>
+                <div class="value">@(_aggregate.LeftDrawsMore ? "true" : "false")</div>
+            </div>
+        </div>
+        <p class="hint" style="margin-top:.5rem">Composite id from the operator: <code>@_aggregate.Aggregate.Id</code></p>
+    }
+</section>
+
+@code {
+    private const int AnomalyDismissalsToSuppress = 3;
+
+    private HubConnection? _hub;
+    private bool _connected;
+    private string _connectionLabel = "connecting";
+
+    private IReadOnlyList<SensorSnapshot> _snapshots = [];
+    private GatewayStatus? _status;
+
+    private List<Alert> _active = [];
+    private List<Alert> _suppressed = [];
+
+    private Alert? _selectedAlert;
+    private SensorSnapshot? _selectedSensor;
+
+    private List<SensorSnapshot> _numeric = [];
+    private string _aggregateA = string.Empty;
+    private string _aggregateB = string.Empty;
+    private AggregateResult? _aggregate;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Seed from REST so the page is populated before the first push arrives.
+        _snapshots = await Gateway.GetSensorsAsync();
+        RefreshNumeric();
+        SortAlerts(await Gateway.GetAlertsAsync());
+
+        _hub = new HubConnectionBuilder()
+            .WithUrl(new Uri(Gateway.BaseAddress, "hubs/telemetry"))
+            .AddJsonProtocol(options => SmartXJson.Configure(options.PayloadSerializerOptions))
+            .WithAutomaticReconnect()
+            .Build();
+
+        _hub.On<List<SensorSnapshot>, GatewayStatus>(HubEvents.Tick, async (snapshots, status) =>
+        {
+            _snapshots = snapshots;
+            _status = status;
+            RefreshNumeric();
+
+            // Keep the inspector pinned to the same node as fresh data lands.
+            if (_selectedSensor is not null)
+                _selectedSensor = snapshots.FirstOrDefault(s => s.Id == _selectedSensor.Id) ?? _selectedSensor;
+
+            await InvokeAsync(StateHasChanged);
+        });
+
+        _hub.On<Alert>(HubEvents.AlertRaised, async alert =>
+        {
+            if (alert.Suppressed) _suppressed.Insert(0, alert);
+            else _active.Insert(0, alert);
+
+            Rank();
+            await InvokeAsync(StateHasChanged);
+        });
+
+        _hub.On<string>(HubEvents.AlertDismissed, async id =>
+        {
+            _active.RemoveAll(a => a.Id == id);
+            _suppressed.RemoveAll(a => a.Id == id);
+            if (_selectedAlert?.Id == id) _selectedAlert = null;
+            await InvokeAsync(StateHasChanged);
+        });
+
+        _hub.Reconnecting += _ => Update("reconnecting", false);
+        _hub.Reconnected += _ => Update("live", true);
+        _hub.Closed += _ => Update("disconnected", false);
+
+        try
+        {
+            await _hub.StartAsync();
+            _connected = true;
+            _connectionLabel = "live";
+        }
+        catch (Exception)
+        {
+            _connectionLabel = "push unavailable";
+        }
+    }
+
+    private Task Update(string label, bool connected)
+    {
+        _connectionLabel = label;
+        _connected = connected;
+        return InvokeAsync(StateHasChanged);
+    }
+
+    private void SortAlerts(IReadOnlyList<Alert> alerts)
+    {
+        _active = alerts.Where(a => !a.Suppressed).ToList();
+        _suppressed = alerts.Where(a => a.Suppressed).ToList();
+        Rank();
+    }
+
+    /// <summary>Severity first, then recency. This ordering is the whole point of the rail.</summary>
+    private void Rank()
+    {
+        _active = _active.OrderByDescending(a => a.Severity).ThenByDescending(a => a.RaisedAt).Take(40).ToList();
+        _suppressed = _suppressed.OrderByDescending(a => a.RaisedAt).Take(40).ToList();
+    }
+
+    private void RefreshNumeric()
+    {
+        _numeric = _snapshots.Where(s => s.Payload != PayloadKind.Boolean).ToList();
+
+        if (_numeric.Count >= 2)
+        {
+            if (!_numeric.Any(s => s.Id == _aggregateA)) _aggregateA = _numeric[0].Id;
+            if (!_numeric.Any(s => s.Id == _aggregateB)) _aggregateB = _numeric[1].Id;
+        }
+    }
+
+    private void SelectAlert(Alert alert)
+    {
+        _selectedAlert = alert;
+        _selectedSensor = _snapshots.FirstOrDefault(s => s.Id == alert.SensorId) ?? _selectedSensor;
+    }
+
+    private void SelectSensor(SensorSnapshot sensor)
+    {
+        _selectedSensor = sensor;
+        _selectedAlert = _active.Concat(_suppressed).FirstOrDefault(a => a.SensorId == sensor.Id);
+    }
+
+    private async Task DismissAsync(Alert alert)
+    {
+        await Gateway.DismissAlertAsync(alert.Id);
+        _active.RemoveAll(a => a.Id == alert.Id);
+        _suppressed.RemoveAll(a => a.Id == alert.Id);
+        _selectedAlert = null;
+    }
+
+    private async Task RestoreAsync(Alert alert)
+    {
+        await Gateway.RestoreAsync(alert.SensorId, alert.Kind);
+        SortAlerts(await Gateway.GetAlertsAsync());
+    }
+
+    private void OnAggregateChanged(ChangeEventArgs args, bool left)
+    {
+        var value = args.Value?.ToString() ?? string.Empty;
+        if (left) _aggregateA = value; else _aggregateB = value;
+    }
+
+    private async Task AggregateAsync()
+        => _aggregate = await Gateway.AggregateAsync(_aggregateA, _aggregateB);
+
+    private bool Flagged(SensorSnapshot sensor)
+        => sensor.IsSilent || _active.Any(a => a.SensorId == sensor.Id && a.Severity >= AlertSeverity.Warning);
+
+    private string TileClass(SensorSnapshot sensor)
+    {
+        var classes = new List<string>();
+        if (Flagged(sensor) && !sensor.IsSilent) classes.Add("flagged");
+        if (sensor.IsSilent) classes.Add("silent");
+        if (sensor.Id == _selectedSensor?.Id) classes.Add("sel");
+        return string.Join(' ', classes);
+    }
+
+    private static string Reading(SensorSnapshot sensor) => sensor.Payload switch
+    {
+        PayloadKind.Boolean => sensor.LatestBool ? "OPEN" : "SHUT",
+        PayloadKind.Integer => sensor.LatestValue.ToString("0"),
+        _ => sensor.LatestValue.ToString("0.0")
+    };
+
+    private static string PayloadType(PayloadKind payload) => payload switch
+    {
+        PayloadKind.Float => "float",
+        PayloadKind.Integer => "int",
+        _ => "bool"
+    };
+
+    private static string SeverityClass(AlertSeverity severity) => severity switch
+    {
+        AlertSeverity.Critical => "crit",
+        AlertSeverity.Warning => "warn",
+        _ => "info"
+    };
+
+    private static string Ago(DateTimeOffset at)
+    {
+        var span = DateTimeOffset.UtcNow - at;
+        return span.TotalSeconds switch
+        {
+            < 60 => $"{span.TotalSeconds:0}s ago",
+            < 3600 => $"{span.TotalMinutes:0}m ago",
+            _ => $"{span.TotalHours:0}h ago"
+        };
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_hub is not null) await _hub.DisposeAsync();
+    }
+}
