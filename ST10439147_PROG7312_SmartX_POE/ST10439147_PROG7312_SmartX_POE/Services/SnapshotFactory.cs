@@ -1,5 +1,4 @@
 ﻿using SmartX.Shared.Classes.Telemetry;
-using SmartX.Shared.Classes.Telemetry;
 
 namespace SmartX.Api.Services;
 
