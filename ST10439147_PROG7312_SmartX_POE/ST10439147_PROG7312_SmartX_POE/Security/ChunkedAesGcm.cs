@@ -167,3 +167,4 @@ public static class ChunkedAesGcm
             throw new ArgumentException($"Attachment key must be exactly {KeySize} bytes (AES-256).", nameof(key));
     }
 }
+//---------------------------DDDDDDDDDDDoooooooooooooo END OF FILE DDDDDDDDDDDoooooooooooooo---------------------------//

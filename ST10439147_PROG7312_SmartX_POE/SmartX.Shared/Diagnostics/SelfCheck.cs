@@ -260,3 +260,4 @@ public static class SelfCheck
 }
 
 public sealed class SelfCheckFailure(string message) : Exception(message);
+//---------------------------DDDDDDDDDDDoooooooooooooo END OF FILE DDDDDDDDDDDoooooooooooooo---------------------------//

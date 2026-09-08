@@ -87,3 +87,4 @@ public static class FileSignature
         return name.Length > 128 ? string.Concat(name.AsSpan(name.Length - 128), "") : name;
     }
 }
+//---------------------------DDDDDDDDDDDoooooooooooooo END OF FILE DDDDDDDDDDDoooooooooooooo---------------------------//

@@ -26,11 +26,12 @@ public sealed class GatewayClient(HttpClient http)
             var status = await http.GetFromJsonAsync<GatewayStatus>("api/health", SmartXJson.Options, ct);
             return (status, stopwatch.ElapsedMilliseconds, null);
         }
-        // OperationCanceledException (not just its TaskCanceledException subtype) is what
-        // the JSON body read throws when the component disposes mid-ping and cancels the
-        // token - navigating away before the first handshake returns. Without this it
-        // escapes as an unhandled error and trips the Blazor error UI.
-        catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException)
+        // A health ping has one job: say whether the gateway is reachable and answering
+        // with a valid status. Any failure - connection refused, a cancelled token, or a
+        // non-JSON body (running the client standalone makes /api/health fall through to
+        // index.html) - is just "not healthy", never an unhandled error that trips the
+        // Blazor error UI.
+        catch (Exception ex)
         {
             return (null, stopwatch.ElapsedMilliseconds, ex.Message);
         }
@@ -160,3 +161,4 @@ public sealed record StressResult(
     bool IsValid,
     bool Survived,
     List<TopologyIssue> Issues);
+//---------------------------DDDDDDDDDDDoooooooooooooo END OF FILE DDDDDDDDDDDoooooooooooooo---------------------------//

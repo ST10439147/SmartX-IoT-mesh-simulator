@@ -55,3 +55,4 @@ public sealed record GatewayStatus(
     double PacketsPerSecond,
     int ActiveAlerts,
     int SuppressedAlerts);
+//---------------------------DDDDDDDDDDDoooooooooooooo END OF FILE DDDDDDDDDDDoooooooooooooo---------------------------//

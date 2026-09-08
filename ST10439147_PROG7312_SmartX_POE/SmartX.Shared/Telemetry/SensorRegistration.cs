@@ -101,3 +101,4 @@ public sealed record SensorSnapshot(
     long PacketsReceived,
     bool IsSilent,
     IReadOnlyList<double> Spark);
+//---------------------------DDDDDDDDDDDoooooooooooooo END OF FILE DDDDDDDDDDDoooooooooooooo---------------------------//

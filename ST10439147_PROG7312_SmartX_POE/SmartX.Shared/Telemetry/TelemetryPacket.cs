@@ -63,3 +63,4 @@ public readonly struct TelemetryPacket<T> : IEquatable<TelemetryPacket<T>> where
 
     public override string ToString() => $"{SensorId} = {Value} @ {TimestampUtc:HH:mm:ss.fff}";
 }
+//---------------------------DDDDDDDDDDDoooooooooooooo END OF FILE DDDDDDDDDDDoooooooooooooo---------------------------//

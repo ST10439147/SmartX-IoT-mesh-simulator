@@ -41,3 +41,4 @@ public sealed record TopologyReport(
     int NodesVisited,
     int MaxDepthReached,
     IReadOnlyList<TopologyIssue> Issues);
+//---------------------------DDDDDDDDDDDoooooooooooooo END OF FILE DDDDDDDDDDDoooooooooooooo---------------------------//

@@ -30,3 +30,4 @@ public static class HubEvents
     public const string AlertDismissed = "alertDismissed";
     public const string SensorsChanged = "sensorsChanged";
 }
+//---------------------------DDDDDDDDDDDoooooooooooooo END OF FILE DDDDDDDDDDDoooooooooooooo---------------------------//
