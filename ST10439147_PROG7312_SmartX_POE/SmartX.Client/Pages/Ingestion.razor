@@ -317,10 +317,17 @@
 
     protected override async Task OnInitializedAsync()
     {
-        _topology = await Gateway.GetTopologyAsync(_cts.Token);
-        if (_topology is not null) _paths = FlattenPaths(_topology, _topology.Name);
+        try
+        {
+            _topology = await Gateway.GetTopologyAsync(_cts.Token);
+            if (_topology is not null) _paths = FlattenPaths(_topology, _topology.Name);
 
-        await RefreshSensorsAsync();
+            await RefreshSensorsAsync();
+        }
+        catch (OperationCanceledException)
+        {
+            // Navigated away before the initial load finished; the component is gone.
+        }
     }
 
     private async Task RefreshSensorsAsync()

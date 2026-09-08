@@ -26,7 +26,11 @@ public sealed class GatewayClient(HttpClient http)
             var status = await http.GetFromJsonAsync<GatewayStatus>("api/health", SmartXJson.Options, ct);
             return (status, stopwatch.ElapsedMilliseconds, null);
         }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        // OperationCanceledException (not just its TaskCanceledException subtype) is what
+        // the JSON body read throws when the component disposes mid-ping and cancels the
+        // token - navigating away before the first handshake returns. Without this it
+        // escapes as an unhandled error and trips the Blazor error UI.
+        catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException)
         {
             return (null, stopwatch.ElapsedMilliseconds, ex.Message);
         }
