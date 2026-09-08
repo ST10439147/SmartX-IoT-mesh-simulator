@@ -1,7 +1,7 @@
-﻿using SmartX.Api.Security;
-using SmartX.Shared.Classes.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
+using SmartX.Api.Security;
+using SmartX.Shared.Diagnostics;
 
 namespace SmartX.Api;
 

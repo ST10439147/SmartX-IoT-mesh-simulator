@@ -1,9 +1,8 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Net.Http.Json;
 using Microsoft.AspNetCore.Components.Forms;
 using SmartX.Shared;
-using SmartX.Shared.Classes.Telemetry;
-using SmartX.Shared.Classes.Topology;
+using SmartX.Shared.Telemetry;
 using SmartX.Shared.Topology;
 
 namespace SmartX.Client.Services;
@@ -36,14 +35,14 @@ public sealed class GatewayClient(HttpClient http)
     public async Task<IReadOnlyList<SensorSnapshot>> GetSensorsAsync(CancellationToken ct = default)
         => await http.GetFromJsonAsync<List<SensorSnapshot>>("api/sensors", SmartXJson.Options, ct) ?? [];
 
-    public async Task<SensorReg?> GetProfileAsync(string id, CancellationToken ct = default)
-        => await http.GetFromJsonAsync<SensorReg>($"api/sensors/{id}/profile", SmartXJson.Options, ct);
+    public async Task<SensorRegistration?> GetProfileAsync(string id, CancellationToken ct = default)
+        => await http.GetFromJsonAsync<SensorRegistration>($"api/sensors/{id}/profile", SmartXJson.Options, ct);
 
     public async Task<DeploymentNode?> GetTopologyAsync(CancellationToken ct = default)
         => await http.GetFromJsonAsync<DeploymentNode>("api/topology", SmartXJson.Options, ct);
 
     /// <summary>Registers a node. Field-level errors come straight back from the API's own validation.</summary>
-    public async Task<RegistrationOutcome> RegisterAsync(SensorReg registration, CancellationToken ct = default)
+    public async Task<RegistrationOutcome> RegisterAsync(SensorRegistration registration, CancellationToken ct = default)
     {
         var response = await http.PostAsJsonAsync("api/sensors", registration, SmartXJson.Options, ct);
 

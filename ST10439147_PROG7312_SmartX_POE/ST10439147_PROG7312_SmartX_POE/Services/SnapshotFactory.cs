@@ -1,4 +1,4 @@
-﻿using SmartX.Shared.Classes.Telemetry;
+using SmartX.Shared.Telemetry;
 
 namespace SmartX.Api.Services;
 
@@ -8,7 +8,7 @@ public static class SnapshotFactory
     /// <summary>Samples kept in each tile's sparkline. Small multiples, shared scale.</summary>
     public const int SparkSamples = 40;
 
-    public static SensorSnapshot Snapshot(this TelemetryStore store, SensorReg sensor)
+    public static SensorSnapshot Snapshot(this TelemetryStore store, SensorRegistration sensor)
     {
         var window = store.Window(sensor.Id, SparkSamples);
         var lastSeen = store.LastSeen(sensor.Id);
@@ -28,7 +28,7 @@ public static class SnapshotFactory
             LatestValue: double.IsNaN(latest) ? 0 : latest,
             // Only meaningful for actuators; leaving it computed for every payload put a
             // confusing "latestBool": true next to every float reading on the wire.
-            LatestBool: sensor.Payload == payloadKind.Boolean && latest > 0.5,
+            LatestBool: sensor.Payload == PayloadKind.Boolean && latest > 0.5,
             LastSeen: lastSeen,
             Baseline: window.Count > 0 ? window.Average() : 0,
             PacketsReceived: store.PacketCount(sensor.Id),

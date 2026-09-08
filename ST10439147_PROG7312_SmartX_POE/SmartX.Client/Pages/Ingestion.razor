@@ -1,7 +1,6 @@
-﻿@page "/ingestion"
+@page "/ingestion"
 @implements IDisposable
-@inject Services.GatewayClient Gateway
-@using SmartX.Shared.Topology
+@inject GatewayClient Gateway
 
 <PageTitle>Ingestion - Smart-X Gateway</PageTitle>
 
@@ -90,7 +89,7 @@
                 <div class="field">
                     <label for="payload">Payload type</label>
                     <InputSelect id="payload" @bind-Value="_model.Payload">
-                        @foreach (var payload in Enum.GetValues<payloadKind>())
+                        @foreach (var payload in Enum.GetValues<PayloadKind>())
                         {
                             <option value="@payload">@PayloadLabel(payload)</option>
                         }
@@ -295,7 +294,7 @@
 @code {
     private readonly CancellationTokenSource _cts = new();
 
-    private SensorReg _model = NewModel();
+    private SensorRegistration _model = NewModel();
     private IReadOnlyList<SensorSnapshot> _sensors = [];
     private DeploymentNode? _topology;
     private List<string> _paths = [];
@@ -460,10 +459,10 @@
         _validating = false;
     }
 
-    private static SensorReg NewModel() => new()
+    private static SensorRegistration NewModel() => new()
     {
         Category = SensorCategory.Environmental,
-        Payload = payloadKind.Float,
+        Payload = PayloadKind.Float,
         PublishIntervalSeconds = 2,
         WarningThreshold = 80
     };
@@ -475,10 +474,10 @@
         _ => "Environmental"
     };
 
-    private static string PayloadLabel(payloadKind payload) => payload switch
+    private static string PayloadLabel(PayloadKind payload) => payload switch
     {
-        payloadKind.Float => "float - continuous reading",
-        payloadKind.Integer => "int - discrete metric",
+        PayloadKind.Float => "float - continuous reading",
+        PayloadKind.Integer => "int - discrete metric",
         _ => "bool - on/off state"
     };
 

@@ -1,5 +1,5 @@
-﻿using SmartX.Shared.Classes.Telemetry;
 using System.Collections.Concurrent;
+using SmartX.Shared.Telemetry;
 
 namespace SmartX.Api.Services;
 
@@ -42,7 +42,7 @@ public sealed class AnomalyEngine(TelemetryStore store, ILogger<AnomalyEngine> l
     private readonly ConcurrentDictionary<string, DateTimeOffset> _lastRaised = new();
 
     /// <summary>Evaluates one node against its own history. Returns an alert only if something changed.</summary>
-    public Alert? Evaluate(SensorReg sensor)
+    public Alert? Evaluate(SensorRegistration sensor)
     {
         var window = store.Window(sensor.Id, 120);
         if (window.Count < MinSamplesForBaseline) return null;
@@ -53,7 +53,7 @@ public sealed class AnomalyEngine(TelemetryStore store, ILogger<AnomalyEngine> l
         // z-score over a 0/1 signal makes every single valve movement a 4-sigma "spike",
         // which is the textbook way to flood a rail until the operator stops reading it.
         // State changes are reported as their own low-severity kind instead.
-        if (sensor.Payload == payloadKind.Boolean)
+        if (sensor.Payload == PayloadKind.Boolean)
         {
             var previous = window[^2];
             if (Math.Abs(observed - previous) < 0.5) return null;
@@ -88,7 +88,7 @@ public sealed class AnomalyEngine(TelemetryStore store, ILogger<AnomalyEngine> l
                 mean, observed, z);
         }
 
-        if (sensor.Payload != payloadKind.Boolean && observed > sensor.WarningThreshold)
+        if (sensor.Payload != PayloadKind.Boolean && observed > sensor.WarningThreshold)
         {
             return Raise(
                 sensor,
@@ -135,7 +135,7 @@ public sealed class AnomalyEngine(TelemetryStore store, ILogger<AnomalyEngine> l
     }
 
     private Alert? Raise(
-        SensorReg sensor,
+        SensorRegistration sensor,
         AlertKind kind,
         AlertSeverity severity,
         string rule,

@@ -1,8 +1,8 @@
-﻿using Microsoft.AspNetCore.WebUtilities;
+using System.Security.Cryptography;
+using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Net.Http.Headers;
 using SmartX.Api.Security;
-using SmartX.Shared.Classes.Telemetry;
-using System.Security.Cryptography;
+using SmartX.Shared.Telemetry;
 
 namespace SmartX.Api.Services;
 

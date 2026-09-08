@@ -361,3 +361,7 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+# SmartX: encrypted attachments and the generated AES key. Never commit either.
+storage/
+*.sxa
+*.key

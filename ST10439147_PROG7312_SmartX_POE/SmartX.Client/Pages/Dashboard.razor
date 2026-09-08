@@ -1,9 +1,8 @@
-﻿@page "/dashboard"
+@page "/dashboard"
 @using Microsoft.AspNetCore.SignalR.Client
 @using Microsoft.Extensions.DependencyInjection
 @implements IAsyncDisposable
-@inject Services.GatewayClient Gateway
-@using SmartX.Shared.Topology
+@inject GatewayClient Gateway
 
 <PageTitle>Live dashboard - Smart-X Gateway</PageTitle>
 
@@ -375,7 +374,7 @@
 
     private void RefreshNumeric()
     {
-        _numeric = _snapshots.Where(s => s.Payload != payloadKind.Boolean).ToList();
+        _numeric = _snapshots.Where(s => s.Payload != PayloadKind.Boolean).ToList();
 
         if (_numeric.Count >= 2)
         {
@@ -433,15 +432,15 @@
 
     private static string Reading(SensorSnapshot sensor) => sensor.Payload switch
     {
-        payloadKind.Boolean => sensor.LatestBool ? "OPEN" : "SHUT",
-        payloadKind.Integer => sensor.LatestValue.ToString("0"),
+        PayloadKind.Boolean => sensor.LatestBool ? "OPEN" : "SHUT",
+        PayloadKind.Integer => sensor.LatestValue.ToString("0"),
         _ => sensor.LatestValue.ToString("0.0")
     };
 
-    private static string PayloadType(payloadKind payload) => payload switch
+    private static string PayloadType(PayloadKind payload) => payload switch
     {
-        payloadKind.Float => "float",
-        payloadKind.Integer => "int",
+        PayloadKind.Float => "float",
+        PayloadKind.Integer => "int",
         _ => "bool"
     };
 

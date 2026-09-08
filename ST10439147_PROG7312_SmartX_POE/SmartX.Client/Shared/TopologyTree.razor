@@ -1,4 +1,3 @@
-﻿@using SmartX.Shared.Topology
 @*
     Renders the deployment hierarchy by recursing on itself - the component calls
     <TopologyTree> for each child, so an arbitrarily deep tree needs no extra markup.
@@ -32,8 +31,7 @@
 @code {
     private const int MaxRenderDepth = 12;
 
-    [Parameter, EditorRequired] 
-    public DeploymentNode Node { get; set; } = default!;
+    [Parameter, EditorRequired] public DeploymentNode Node { get; set; } = default!;
 
     [Parameter] public int Depth { get; set; }
 

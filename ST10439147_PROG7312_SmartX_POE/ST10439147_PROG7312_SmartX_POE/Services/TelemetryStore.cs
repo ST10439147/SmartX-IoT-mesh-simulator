@@ -1,9 +1,5 @@
-﻿using System.Collections.Concurrent;
-//using SmartX.Shared.C;
-using SmartX.Shared.Classes.Collections;
-using SmartX.Shared.Classes.Ingestion;
-using SmartX.Shared.Classes.Telemetry;
-using SmartX.Shared.Classes.Topology;
+using System.Collections.Concurrent;
+using SmartX.Shared.Telemetry;
 using SmartX.Shared.Topology;
 
 namespace SmartX.Api.Services;
@@ -24,7 +20,7 @@ public sealed class TelemetryStore
 {
     private const int WindowPerSensor = 240;   // ~8 minutes at a 2s publish interval
 
-    private readonly ConcurrentDictionary<string, SensorReg> _sensors = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, SensorRegistration> _sensors = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, CircularTelemetryBuffer<float>> _floats = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, CircularTelemetryBuffer<int>> _integers = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, CircularTelemetryBuffer<bool>> _booleans = new(StringComparer.OrdinalIgnoreCase);
@@ -41,14 +37,14 @@ public sealed class TelemetryStore
     /// <summary>The deployment tree every registration path is validated against.</summary>
     public DeploymentNode Topology { get; } = SeedTopology();
 
-    public IReadOnlyCollection<SensorReg> Sensors => _sensors.Values.ToList();
+    public IReadOnlyCollection<SensorRegistration> Sensors => _sensors.Values.ToList();
 
-    public bool TryGet(string id, out SensorReg sensor) => _sensors.TryGetValue(id, out sensor!);
+    public bool TryGet(string id, out SensorRegistration sensor) => _sensors.TryGetValue(id, out sensor!);
 
     public bool Exists(string id) => _sensors.ContainsKey(id);
 
     /// <summary>Registers a node and allocates its typed ring buffer. Idempotent on the MAC.</summary>
-    public SensorReg Register(SensorReg sensor)
+    public SensorRegistration Register(SensorRegistration sensor)
     {
         sensor.Id = sensor.MacAddress.Replace('-', ':').ToUpperInvariant();
         sensor.RegisteredAt = DateTimeOffset.UtcNow;
@@ -57,14 +53,14 @@ public sealed class TelemetryStore
 
         switch (sensor.Payload)
         {
-            case payloadKind.Float:
+            case PayloadKind.Float:
                 _floats.TryAdd(sensor.Id, new CircularTelemetryBuffer<float>(WindowPerSensor));
                 _archives.TryAdd(sensor.Id, new TelemetryBatchArchive(cycleCapacity: 48));
                 break;
-            case payloadKind.Integer:
+            case PayloadKind.Integer:
                 _integers.TryAdd(sensor.Id, new CircularTelemetryBuffer<int>(WindowPerSensor));
                 break;
-            case payloadKind.Boolean:
+            case PayloadKind.Boolean:
                 _booleans.TryAdd(sensor.Id, new CircularTelemetryBuffer<bool>(WindowPerSensor));
                 break;
         }
