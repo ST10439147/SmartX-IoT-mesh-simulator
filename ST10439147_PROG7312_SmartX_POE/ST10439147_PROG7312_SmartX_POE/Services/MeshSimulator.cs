@@ -22,6 +22,10 @@ public sealed class MeshSimulator(
 {
     private static readonly TimeSpan Tick = TimeSpan.FromSeconds(1);
 
+    // Ticks of history synthesised at boot so the dashboard opens with full sparklines
+    // and a usable anomaly baseline instead of a flat line that fills in over ~4 minutes.
+    private const int WarmupTicks = 240;
+
     // Deterministic seed so a demo run looks the same twice - swap for Random.Shared
     // if you want genuinely different behaviour on every boot.
     private readonly Random _random = new(7312);
@@ -31,10 +35,22 @@ public sealed class MeshSimulator(
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         SeedMesh();
-        logger.LogInformation("Mesh simulator seeded {Count} nodes", store.Sensors.Count);
+
+        // ponytail: warmup reuses the live publish path, so backfilled packets are all
+        // stamped at boot time. Sparklines plot by index so that is invisible there;
+        // /history shows a compressed leading segment. Thread backdated timestamps
+        // through PublishCycle if that ever matters.
+        for (var warm = 1; warm <= WarmupTicks; warm++) PublishCycle(warm);
+
+        // Drop faults the accelerated warmup happened to inject so the dashboard opens
+        // on a healthy mesh; real spikes and disconnects accumulate from here.
+        foreach (var node in _state.Values) node.MutedUntil = 0;
+        anomalies.Clear();
+
+        logger.LogInformation("Mesh simulator seeded {Count} nodes, warmed {Ticks} ticks", store.Sensors.Count, WarmupTicks);
 
         using var timer = new PeriodicTimer(Tick);
-        var elapsed = 0;
+        var elapsed = WarmupTicks;
 
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
