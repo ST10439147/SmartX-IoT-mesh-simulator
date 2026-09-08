@@ -132,3 +132,4 @@ public static class SensorReadingExtensions
         return total;
     }
 }
+//---------------------------DDDDDDDDDDDoooooooooooooo END OF FILE DDDDDDDDDDDoooooooooooooo---------------------------//

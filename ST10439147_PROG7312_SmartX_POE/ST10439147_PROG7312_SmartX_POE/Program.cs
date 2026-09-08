@@ -278,3 +278,4 @@ static Dictionary<string, string[]> Validate(object model)
 }
 
 internal sealed record RestoreRequest(string SensorId, AlertKind Kind);
+//---------------------------DDDDDDDDDDDoooooooooooooo END OF FILE DDDDDDDDDDDoooooooooooooo---------------------------//

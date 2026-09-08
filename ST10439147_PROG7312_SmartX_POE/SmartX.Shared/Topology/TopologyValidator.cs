@@ -186,3 +186,4 @@ public static class TopologyValidator
         public readonly HashSet<string> SensorIds = new(StringComparer.OrdinalIgnoreCase);
     }
 }
+//---------------------------DDDDDDDDDDDoooooooooooooo END OF FILE DDDDDDDDDDDoooooooooooooo---------------------------//

@@ -130,3 +130,4 @@ public sealed class CircularTelemetryBuffer<T> : IEnumerable<TelemetryPacket<T>>
 
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 }
+//---------------------------DDDDDDDDDDDoooooooooooooo END OF FILE DDDDDDDDDDDoooooooooooooo---------------------------//

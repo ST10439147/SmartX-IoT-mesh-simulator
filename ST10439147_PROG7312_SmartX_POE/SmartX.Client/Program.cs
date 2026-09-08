@@ -23,3 +23,4 @@ builder.Services.AddScoped(_ => new HttpClient
 builder.Services.AddScoped<GatewayClient>();
 
 await builder.Build().RunAsync();
+//---------------------------DDDDDDDDDDDoooooooooooooo END OF FILE DDDDDDDDDDDoooooooooooooo---------------------------//

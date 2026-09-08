@@ -13,3 +13,4 @@ public sealed record AttachmentInfo(
     long StoredBytes,
     DateTimeOffset UploadedAt,
     string Sha256);
+//---------------------------DDDDDDDDDDDoooooooooooooo END OF FILE DDDDDDDDDDDoooooooooooooo---------------------------//
