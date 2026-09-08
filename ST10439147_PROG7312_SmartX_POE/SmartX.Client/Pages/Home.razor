@@ -92,18 +92,6 @@ else
 
 <div class="split">
     <div class="panel">
-        <div class="panel-head"><h2>What this build does</h2></div>
-        <ul class="list">
-            <li><span class="tag">generics</span><span class="grow">One <code>TelemetryPacket&lt;T&gt;</code> carries float, int and bool payloads with zero boxing.</span></li>
-            <li><span class="tag">operators</span><span class="grow">Meters aggregate with <code>+</code> and compare with <code>&gt;</code> directly in code.</span></li>
-            <li><span class="tag">arrays</span><span class="grow">Ragged poll cycles stage in <code>float[][]</code>, project to <code>float[,]</code>, flush into <code>List&lt;T&gt;</code>.</span></li>
-            <li><span class="tag">recursion</span><span class="grow">Deployment paths are validated tier by tier with a depth ceiling and a cycle guard.</span></li>
-            <li><span class="tag">collections</span><span class="grow">A custom fixed-capacity ring buffer bounds memory under an unbounded stream.</span></li>
-            <li><span class="tag">uploads</span><span class="grow">Attachments stream through a multipart reader into AES&#8209;256&#8209;GCM storage.</span></li>
-        </ul>
-    </div>
-
-    <div class="panel">
         <div class="panel-head"><h2>Engagement strategy</h2></div>
         <p>
             Task&nbsp;1 selected <strong>anomaly-first visual encoding</strong> with a severity-ranked
