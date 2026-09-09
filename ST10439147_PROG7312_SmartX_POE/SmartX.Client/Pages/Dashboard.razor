@@ -202,6 +202,30 @@
                 }
             </div>
         </div>
+
+        <div class="attachments-block">
+            <h3>Attached files</h3>
+            @if (_selectedAttachments.Count == 0)
+            {
+                <p class="hint">No config files, logs or photos attached to this node. Add one on the Ingestion page.</p>
+            }
+            else
+            {
+                <ul class="list">
+                    @foreach (var attachment in _selectedAttachments)
+                    {
+                        <li>
+                            <span class="tag ok">@attachment.DetectedType</span>
+                            <span class="grow">@attachment.FileName</span>
+                            <span class="meta">@Bytes(attachment.PlaintextBytes) &middot; @Ago(attachment.UploadedAt)</span>
+                            <a href="@Gateway.DownloadUrl(attachment)" target="_blank" rel="noopener">
+                                <button class="tiny">Download</button>
+                            </a>
+                        </li>
+                    }
+                </ul>
+            }
+        </div>
     </section>
 }
 
@@ -286,6 +310,7 @@
 
     private Alert? _selectedAlert;
     private SensorSnapshot? _selectedSensor;
+    private IReadOnlyList<AttachmentInfo> _selectedAttachments = [];
 
     private List<SensorSnapshot> _numeric = [];
     private string _aggregateA = string.Empty;
@@ -383,17 +408,24 @@
         }
     }
 
-    private void SelectAlert(Alert alert)
+    private async Task SelectAlert(Alert alert)
     {
         _selectedAlert = alert;
         _selectedSensor = _snapshots.FirstOrDefault(s => s.Id == alert.SensorId) ?? _selectedSensor;
+        await LoadAttachmentsAsync();
     }
 
-    private void SelectSensor(SensorSnapshot sensor)
+    private async Task SelectSensor(SensorSnapshot sensor)
     {
         _selectedSensor = sensor;
         _selectedAlert = _active.Concat(_suppressed).FirstOrDefault(a => a.SensorId == sensor.Id);
+        await LoadAttachmentsAsync();
     }
+
+    private async Task LoadAttachmentsAsync()
+        => _selectedAttachments = _selectedSensor is null
+            ? []
+            : await Gateway.GetAttachmentsAsync(_selectedSensor.Id);
 
     private async Task DismissAsync(Alert alert)
     {
@@ -449,6 +481,13 @@
         AlertSeverity.Critical => "crit",
         AlertSeverity.Warning => "warn",
         _ => "info"
+    };
+
+    private static string Bytes(long bytes) => bytes switch
+    {
+        < 1024 => $"{bytes} B",
+        < 1024 * 1024 => $"{bytes / 1024d:0.#} KB",
+        _ => $"{bytes / (1024d * 1024d):0.##} MB"
     };
 
     private static string Ago(DateTimeOffset at)
