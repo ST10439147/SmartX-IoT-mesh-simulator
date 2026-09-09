@@ -1,0 +1,30 @@
+@inject IJSRuntime JS
+
+@*
+    Light / dark switch. The palette lives entirely in CSS variables keyed off
+    <html data-theme>; this component just flips that attribute and persists the
+    choice to localStorage (see the bootstrap script in index.html).
+*@
+
+<button class="theme-toggle" type="button" @onclick="Toggle"
+        title="Switch between light and dark theme"
+        aria-label="Switch between light and dark theme">
+    @(_theme == "light" ? "☽" : "☀")
+</button>
+
+@code {
+    private string _theme = "dark";
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        _theme = await JS.InvokeAsync<string>("smartXTheme.get");
+        StateHasChanged();
+    }
+
+    private async Task Toggle()
+    {
+        _theme = _theme == "light" ? "dark" : "light";
+        await JS.InvokeVoidAsync("smartXTheme.set", _theme);
+    }
+}

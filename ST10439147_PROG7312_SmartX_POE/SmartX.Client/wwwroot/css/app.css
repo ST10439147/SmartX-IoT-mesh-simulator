@@ -34,6 +34,32 @@
 
     --mono: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Consolas, monospace;
     --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+
+    --wash: #14202e;
+    --topbar-bg: rgba(10, 14, 20, .85);
+}
+
+/* Light theme: same roles, inverted values. Everything else in this file reads
+   these variables, so the toggle in the topbar only has to flip data-theme. */
+:root[data-theme="light"] {
+    --bg: #f4f6f9;
+    --panel: #ffffff;
+    --panel-2: #eef1f5;
+    --line: #d3dae3;
+    --line-soft: #e4e9ef;
+
+    --text: #1a2431;
+    --muted: #53637a;
+    --dim: #7d8da0;
+
+    --normal: #5f7f9f;
+    --accent: #0f9e72;
+    --info: #2f6fdb;
+    --warn: #c07c1e;
+    --crit: #d63b57;
+
+    --wash: #dfe8f2;
+    --topbar-bg: rgba(244, 246, 249, .85);
 }
 
 * { box-sizing: border-box; }
@@ -47,7 +73,7 @@ body {
     font-family: var(--sans);
     line-height: 1.55;
     /* Radial wash keeps a large, mostly empty dashboard from reading as a broken page. */
-    background-image: radial-gradient(1200px 600px at 15% -10%, #14202e 0%, transparent 60%);
+    background-image: radial-gradient(1200px 600px at 15% -10%, var(--wash) 0%, transparent 60%);
     background-attachment: fixed;
 }
 
@@ -75,7 +101,7 @@ code, .mono { font-family: var(--mono); font-size: .85em; }
     gap: var(--gap);
     padding: .7rem clamp(.75rem, 3vw, 2rem);
     border-bottom: 1px solid var(--line);
-    background: rgba(10, 14, 20, .85);
+    background: var(--topbar-bg);
     backdrop-filter: blur(10px);
     position: sticky;
     top: 0;
@@ -129,6 +155,15 @@ footer.foot {
 }
 .nav a:hover { color: var(--text); background: var(--panel-2); }
 .nav a.active { color: var(--text); background: var(--panel-2); border-color: var(--line); }
+
+/* ---------------------------------------------------------------- theme toggle */
+
+.theme-toggle {
+    display: grid; place-items: center;
+    width: 34px; height: 34px; padding: 0;
+    border-radius: 999px;
+    font-size: 1rem; line-height: 1;
+}
 
 /* ---------------------------------------------------------------- link state */
 
