@@ -1,7 +1,131 @@
-﻿@page "/"
+@page "/"
+@implements IDisposable
+@inject GatewayClient Gateway
 
-<PageTitle>Home</PageTitle>
+<PageTitle>Smart-X Gateway</PageTitle>
 
-<h1>Hello, world!</h1>
+<div class="page-head">
+    <h1>Gateway console</h1>
+    <p>
+        This gateway receives multi-typed telemetry from the Smart&#8209;X ESP32 mesh &mdash; floats for soil
+        moisture, integers for power wattage, booleans for valve state &mdash; validates it, and surfaces
+        anomalies to whoever is on shift. Pick an architectural pillar to begin.
+    </p>
+</div>
 
-Welcome to your new app.
+@if (_status is null)
+{
+    <div class="toast busy">
+        <span class="dot wait"></span>
+        <span>@(_error ?? "Handshaking with the gateway API...")</span>
+    </div>
+}
+else
+{
+    <div class="panel">
+        <div class="panel-head">
+            <h2>Link established</h2>
+            <span class="tag ok">@_latency ms round trip</span>
+            <span class="count">@Gateway.BaseAddress</span>
+        </div>
+
+        <div class="stats">
+            <div class="stat">
+                <div class="label">Uptime</div>
+                <div class="value">@TimeSpan.FromSeconds(_status.UptimeSeconds).ToString(@"hh\:mm\:ss")</div>
+            </div>
+            <div class="stat">
+                <div class="label">Nodes</div>
+                <div class="value">@_status.SensorsRegistered</div>
+            </div>
+            <div class="stat">
+                <div class="label">Silent</div>
+                <div class="value @(_status.SensorsSilent > 0 ? "warn" : "ok")">@_status.SensorsSilent</div>
+            </div>
+            <div class="stat">
+                <div class="label">Packets</div>
+                <div class="value">@_status.PacketsIngested.ToString("N0")</div>
+            </div>
+            <div class="stat">
+                <div class="label">Throughput</div>
+                <div class="value">@_status.PacketsPerSecond.ToString("0.0")/s</div>
+            </div>
+            <div class="stat">
+                <div class="label">Open alerts</div>
+                <div class="value @(_status.ActiveAlerts > 0 ? "crit" : "ok")">@_status.ActiveAlerts</div>
+            </div>
+        </div>
+    </div>
+}
+
+<div class="pillars">
+    <a class="pillar" href="ingestion">
+        <span class="step">Pillar 01 &middot; available</span>
+        <h3>Sensor data ingestion &amp; telemetry</h3>
+        <p>
+            Register mesh nodes by MAC address and deployment path, attach device configs, hardware
+            logs and deployment photos, then watch the anomaly-first dashboard as packets land.
+        </p>
+        <span class="cta">Open ingestion &rarr;</span>
+    </a>
+
+    <div class="pillar locked" aria-disabled="true" title="Delivered in Part 2 of the Portfolio of Evidence">
+        <span class="step">Pillar 02 &middot; part 2</span>
+        <h3>Real-time command stream &amp; history</h3>
+        <p>
+            Issue commands back down to actuators and replay the full command history against the
+            telemetry timeline. Not yet wired up.
+        </p>
+        <span class="cta">Locked</span>
+    </div>
+
+    <div class="pillar locked" aria-disabled="true" title="Delivered in the final Portfolio of Evidence">
+        <span class="step">Pillar 03 &middot; final poe</span>
+        <h3>Network topology &amp; mesh routing</h3>
+        <p>
+            Visualise the mesh graph and compute routing between gateways. The deployment tree that
+            feeds it is already validated on the ingestion page.
+        </p>
+        <span class="cta">Locked</span>
+    </div>
+</div>
+
+<div class="split">
+    <div class="panel">
+        <div class="panel-head"><h2>Engagement strategy</h2></div>
+        <p>
+            Task&nbsp;1 selected <strong>anomaly-first visual encoding</strong> with a severity-ranked
+            alert rail and suppression of non-actionable alerts. The dashboard implements exactly that:
+        </p>
+        <ul class="list">
+            <li><span class="tag crit">spike</span><span class="grow">z&#8209;score against a rolling per-sensor baseline.</span></li>
+            <li><span class="tag warn">silence</span><span class="grow">a per-node timer, because absent data crosses no threshold.</span></li>
+            <li><span class="tag info">suppress</span><span class="grow">repeatedly dismissed alerts collapse, auditable, never discarded.</span></li>
+        </ul>
+        <div class="actions">
+            <a href="dashboard"><button class="primary">Open the live dashboard</button></a>
+        </div>
+    </div>
+</div>
+
+@code {
+    private readonly CancellationTokenSource _cts = new();
+
+    private GatewayStatus? _status;
+    private long _latency;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var (status, ms, error) = await Gateway.PingAsync(_cts.Token);
+        _status = status;
+        _latency = ms;
+        _error = error is null ? null : $"Gateway unreachable: {error}";
+    }
+
+    public void Dispose()
+    {
+        _cts.Cancel();
+        _cts.Dispose();
+    }
+}

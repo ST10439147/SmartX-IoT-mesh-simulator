@@ -1,0 +1,56 @@
+@*
+    Small multiple. Every tile shares this component, so every trace has the same height,
+    the same stroke weight and the same baseline treatment - which is what makes an
+    abnormal shape findable by scanning rather than by reading values.
+
+    Inline SVG, no charting library: a polyline is a handful of coordinates, and pulling
+    in a JS chart pack to draw one would cost more bytes than the whole client.
+*@
+
+@if (Values is { Count: > 1 })
+{
+    <svg class="spark" viewBox="0 0 100 30" preserveAspectRatio="none" role="img" aria-label="@Label">
+        <polyline points="@_points"
+                  fill="none"
+                  stroke="@Stroke"
+                  stroke-width="1.5"
+                  stroke-linejoin="round"
+                  vector-effect="non-scaling-stroke" />
+    </svg>
+}
+else
+{
+    <svg class="spark" viewBox="0 0 100 30" preserveAspectRatio="none" role="img" aria-label="awaiting telemetry">
+        <line x1="0" y1="15" x2="100" y2="15" stroke="var(--line)" stroke-width="1" stroke-dasharray="3 3" vector-effect="non-scaling-stroke" />
+    </svg>
+}
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<double>? Values { get; set; }
+
+    /// <summary>Muted by default; only a flagged tile gets to use colour.</summary>
+    [Parameter] public string Stroke { get; set; } = "var(--normal)";
+
+    [Parameter] public string Label { get; set; } = "recent readings";
+
+    private string _points = string.Empty;
+
+    protected override void OnParametersSet()
+    {
+        if (Values is not { Count: > 1 }) return;
+
+        var min = Values.Min();
+        var max = Values.Max();
+        var span = max - min;
+
+        // A flat signal would divide by zero; draw it down the middle instead.
+        var scale = span < 1e-9 ? 0d : 26d / span;
+        var step = 100d / (Values.Count - 1);
+
+        _points = string.Join(' ', Values.Select((v, i) =>
+        {
+            var y = span < 1e-9 ? 15d : 28d - (v - min) * scale;
+            return $"{i * step:0.##},{y:0.##}";
+        }));
+    }
+}

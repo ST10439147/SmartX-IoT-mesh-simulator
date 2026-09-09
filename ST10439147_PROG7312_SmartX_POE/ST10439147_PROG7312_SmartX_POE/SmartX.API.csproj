@@ -1,19 +1,24 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
+  <ItemGroup>
+    <ProjectReference Include="..\SmartX.Shared\SmartX.Shared.csproj" />
+    <!-- Hosts the Blazor WebAssembly client's static assets from this same process,
+         so one `dotnet run` serves both the API and the dashboard on one origin. -->
+    <ProjectReference Include="..\SmartX.Client\SmartX.Client.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.Server" Version="10.0.10" />
+  </ItemGroup>
+
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Project folder keeps the POE student-number name; the assembly and namespace
+         stay SmartX.Api so the ported source compiles unchanged. -->
+    <AssemblyName>SmartX.Api</AssemblyName>
+    <RootNamespace>SmartX.Api</RootNamespace>
   </PropertyGroup>
-
-  <ItemGroup>
-    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.11" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Folder Include="Hubs\" />
-    <Folder Include="Services\" />
-    <Folder Include="Security\" />
-  </ItemGroup>
 
 </Project>
