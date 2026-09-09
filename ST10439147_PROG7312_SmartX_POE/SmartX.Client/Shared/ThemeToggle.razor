@@ -2,10 +2,9 @@
 
 @*
     Light / dark switch. The palette lives entirely in CSS variables keyed off
-    <html data-theme>; this component flips that attribute (via the helper in
-    index.html) and lets the helper persist the choice to localStorage.
-    The toggle reads the live DOM state, so it stays correct even if this
-    component's cached _theme is momentarily stale.
+    <html data-theme>; index.html sets that attribute before first paint and
+    exposes window.smartXTheme. This component just calls it - with an inline
+    fallback so a stale cached index.html (missing the helper) still toggles.
 *@
 
 <button class="theme-toggle" type="button" @onclick="Toggle"
@@ -17,12 +16,28 @@
 @code {
     private string _theme = "dark";
 
-    // Standalone WASM has no prerender, so JS interop is available here - runs
-    // once before the first render, no post-render StateHasChanged to swap the
-    // button out from under the user's first click.
+    // Standalone WASM has no prerender, so JS interop is fine here - one call
+    // before first render, no post-render StateHasChanged to swap the button
+    // out from under the user's first click.
     protected override async Task OnInitializedAsync()
-        => _theme = await JS.InvokeAsync<string>("smartXTheme.get");
+    {
+        try { _theme = await JS.InvokeAsync<string>("smartXTheme.get"); }
+        catch { _theme = "dark"; }
+    }
 
     private async Task Toggle()
-        => _theme = await JS.InvokeAsync<string>("smartXTheme.toggle");
+    {
+        var next = _theme == "light" ? "dark" : "light";
+        try
+        {
+            await JS.InvokeVoidAsync("smartXTheme.set", next);
+        }
+        catch
+        {
+            await JS.InvokeVoidAsync("eval",
+                $"document.documentElement.dataset.theme='{next}';"
+              + $"try{{localStorage.setItem('smartx-theme','{next}')}}catch(e){{}}");
+        }
+        _theme = next;
+    }
 }

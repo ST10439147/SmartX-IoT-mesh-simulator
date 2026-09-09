@@ -11,15 +11,14 @@
     <script>
         // Apply the saved theme before first paint so there is no flash of the wrong palette.
         (function () {
-            var t = localStorage.getItem('smartx-theme') || 'dark';
+            var t = 'dark';
+            try { t = localStorage.getItem('smartx-theme') || 'dark'; } catch (e) { }
             document.documentElement.setAttribute('data-theme', t);
             window.smartXTheme = {
                 get: function () { return document.documentElement.getAttribute('data-theme') || 'dark'; },
-                toggle: function () {
-                    var next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
-                    document.documentElement.setAttribute('data-theme', next);
-                    localStorage.setItem('smartx-theme', next);
-                    return next;
+                set: function (v) {
+                    document.documentElement.setAttribute('data-theme', v);
+                    try { localStorage.setItem('smartx-theme', v); } catch (e) { }
                 }
             };
         })();
