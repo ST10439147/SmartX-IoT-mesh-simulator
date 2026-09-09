@@ -15,9 +15,11 @@
             document.documentElement.setAttribute('data-theme', t);
             window.smartXTheme = {
                 get: function () { return document.documentElement.getAttribute('data-theme') || 'dark'; },
-                set: function (v) {
-                    document.documentElement.setAttribute('data-theme', v);
-                    localStorage.setItem('smartx-theme', v);
+                toggle: function () {
+                    var next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+                    document.documentElement.setAttribute('data-theme', next);
+                    localStorage.setItem('smartx-theme', next);
+                    return next;
                 }
             };
         })();

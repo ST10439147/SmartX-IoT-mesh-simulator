@@ -37,6 +37,9 @@
 
     --wash: #14202e;
     --topbar-bg: rgba(10, 14, 20, .85);
+    --hover: #1e2a3a;           /* row / button hover fill */
+    --line-strong: #2f4a63;     /* hover border */
+    --accent-hover: #4de3b6;
 }
 
 /* Light theme: same roles, inverted values. Everything else in this file reads
@@ -60,6 +63,9 @@
 
     --wash: #dfe8f2;
     --topbar-bg: rgba(244, 246, 249, .85);
+    --hover: #e3e8f0;
+    --line-strong: #b6c2d1;
+    --accent-hover: #14b884;
 }
 
 * { box-sizing: border-box; }
@@ -225,7 +231,7 @@ footer.foot {
     content: ""; position: absolute; inset: 0 0 auto 0; height: 3px;
     background: linear-gradient(90deg, var(--accent), var(--info));
 }
-.pillar:hover { transform: translateY(-3px); border-color: #2f4a63; }
+.pillar:hover { transform: translateY(-3px); border-color: var(--line-strong); }
 
 .pillar.locked { opacity: .5; cursor: not-allowed; }
 .pillar.locked::before { background: var(--line); }
@@ -285,8 +291,8 @@ footer.foot {
     cursor: pointer;
     transition: border-color .15s, background .15s;
 }
-.alert:hover { background: #1b2635; }
-.alert.sel { border-color: var(--info); background: #1b2635; }
+.alert:hover { background: var(--hover); }
+.alert.sel { border-color: var(--info); background: var(--hover); }
 .alert.crit { border-left-color: var(--crit); }
 .alert.warn { border-left-color: var(--warn); }
 .alert.info { border-left-color: var(--info); }
@@ -342,7 +348,7 @@ footer.foot {
     font: inherit;
     transition: border-color .15s, transform .15s;
 }
-.tile:hover { border-color: #2f4a63; transform: translateY(-2px); }
+.tile:hover { border-color: var(--line-strong); transform: translateY(-2px); }
 .tile.flagged { border-color: rgba(255, 84, 112, .55); background: rgba(255, 84, 112, .06); }
 .tile.silent { border-style: dashed; opacity: .72; }
 .tile.sel { border-color: var(--info); }
@@ -415,11 +421,11 @@ button {
     cursor: pointer;
     transition: background .15s, border-color .15s;
 }
-button:hover:not(:disabled) { background: #1e2a3a; border-color: #2f4a63; }
+button:hover:not(:disabled) { background: var(--hover); border-color: var(--line-strong); }
 button:disabled { opacity: .45; cursor: not-allowed; }
 
 button.primary { background: var(--accent); border-color: var(--accent); color: #04140f; }
-button.primary:hover:not(:disabled) { background: #4de3b6; border-color: #4de3b6; }
+button.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
 button.ghost { background: transparent; }
 button.danger { color: var(--crit); border-color: rgba(255, 84, 112, .35); }
 button.tiny { padding: .2rem .5rem; font-size: .75rem; }

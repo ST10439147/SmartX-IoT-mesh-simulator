@@ -52,7 +52,7 @@ public sealed class MeshSimulator(
         using var timer = new PeriodicTimer(Tick);
         var elapsed = WarmupTicks;
 
-        while (await timer.WaitForNextTickAsync(stoppingToken))
+        while (await WaitForTickAsync(timer, stoppingToken))
         {
             elapsed++;
 
@@ -81,6 +81,20 @@ public sealed class MeshSimulator(
                 // One bad tick must not take the whole ingest loop down with it.
                 logger.LogError(ex, "Simulator tick {Tick} failed", elapsed);
             }
+        }
+    }
+
+    // WaitForNextTickAsync throws OperationCanceledException on shutdown; the loop
+    // just needs to end, so swallow it here rather than let it escape ExecuteAsync.
+    private static async ValueTask<bool> WaitForTickAsync(PeriodicTimer timer, CancellationToken token)
+    {
+        try
+        {
+            return await timer.WaitForNextTickAsync(token);
+        }
+        catch (OperationCanceledException)
+        {
+            return false;
         }
     }
 

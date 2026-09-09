@@ -2,29 +2,27 @@
 
 @*
     Light / dark switch. The palette lives entirely in CSS variables keyed off
-    <html data-theme>; this component just flips that attribute and persists the
-    choice to localStorage (see the bootstrap script in index.html).
+    <html data-theme>; this component flips that attribute (via the helper in
+    index.html) and lets the helper persist the choice to localStorage.
+    The toggle reads the live DOM state, so it stays correct even if this
+    component's cached _theme is momentarily stale.
 *@
 
 <button class="theme-toggle" type="button" @onclick="Toggle"
         title="Switch between light and dark theme"
         aria-label="Switch between light and dark theme">
-    @(_theme == "light" ? "☽" : "☀")
+    @(_theme == "light" ? "☀" : "☽")
 </button>
 
 @code {
     private string _theme = "dark";
 
-    protected override async Task OnAfterRenderAsync(bool firstRender)
-    {
-        if (!firstRender) return;
-        _theme = await JS.InvokeAsync<string>("smartXTheme.get");
-        StateHasChanged();
-    }
+    // Standalone WASM has no prerender, so JS interop is available here - runs
+    // once before the first render, no post-render StateHasChanged to swap the
+    // button out from under the user's first click.
+    protected override async Task OnInitializedAsync()
+        => _theme = await JS.InvokeAsync<string>("smartXTheme.get");
 
     private async Task Toggle()
-    {
-        _theme = _theme == "light" ? "dark" : "light";
-        await JS.InvokeVoidAsync("smartXTheme.set", _theme);
-    }
+        => _theme = await JS.InvokeAsync<string>("smartXTheme.toggle");
 }
