@@ -15,7 +15,7 @@ public static class SmartXJson
     /// <summary>Applies the SmartX conventions to an existing options object.</summary>
     public static JsonSerializerOptions Configure(JsonSerializerOptions options)
     {
-        // Enums travel as names, so a payload reads "Environmental" rather than "0" -
+        // Enums travel as names, so a payload reads "SoilMoisture" rather than "0" -
         // worth it for anyone poking the API with curl.
         options.Converters.Add(new JsonStringEnumConverter());
         return options;

@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using System.Text.Json;
 using SmartX.Shared.Telemetry;
 using SmartX.Shared.Topology;
@@ -27,6 +28,7 @@ public static class SelfCheck
         RecursiveValidationSurvivesPathologicalDepth(log);
         RecursiveValidationDetectsCycles(log);
         PacketSurvivesJsonRoundTrip(log);
+        EverySensorIsASpecificAgriculturalDevice(log);
 
         return log;
     }
@@ -36,7 +38,7 @@ public static class SelfCheck
         var buffer = new CircularTelemetryBuffer<int>(4);
 
         for (var i = 1; i <= 6; i++)
-            buffer.Add(new TelemetryPacket<int>("meter-1", i, SensorCategory.PowerConsumption));
+            buffer.Add(new TelemetryPacket<int>("meter-1", i, SensorCategory.PumpPower));
 
         Assert(buffer.Count == 4, "buffer should cap at its capacity");
         Assert(buffer.Capacity == 4, "capacity should not drift");
@@ -95,12 +97,12 @@ public static class SelfCheck
 
     private static void GenericPacketCarriesAllThreePayloadTypesWithoutBoxing(List<string> log)
     {
-        var moisture = new TelemetryPacket<float>("probe-7", 41.8f, SensorCategory.Environmental);
-        var wattage = new TelemetryPacket<int>("meter-1", 2400, SensorCategory.PowerConsumption);
-        var valve = new TelemetryPacket<bool>("valve-3", true, SensorCategory.Actuator);
+        var moisture = new TelemetryPacket<float>("probe-7", 41.8f, SensorCategory.SoilMoisture);
+        var wattage = new TelemetryPacket<int>("meter-1", 2400, SensorCategory.PumpPower);
+        var valve = new TelemetryPacket<bool>("valve-3", true, SensorCategory.IrrigationValve);
 
         Assert(moisture.Value == 41.8f && wattage.Value == 2400 && valve.Value, "one wrapper, three payload types");
-        Assert(valve == new TelemetryPacket<bool>("valve-3", true, SensorCategory.Actuator, valve.TimestampUtc),
+        Assert(valve == new TelemetryPacket<bool>("valve-3", true, SensorCategory.IrrigationValve, valve.TimestampUtc),
             "packet equality should compare id, value and timestamp");
 
         // The no-boxing claim, measured rather than asserted in a comment. Filling a
@@ -108,7 +110,7 @@ public static class SelfCheck
         // If TelemetryPacket<T> were a class, or if T were boxed into object anywhere
         // on this path, this would allocate megabytes.
         var buffer = new CircularTelemetryBuffer<float>(512);
-        var packet = new TelemetryPacket<float>("probe-7", 41.8f, SensorCategory.Environmental);
+        var packet = new TelemetryPacket<float>("probe-7", 41.8f, SensorCategory.SoilMoisture);
 
         buffer.Add(packet); // warm up, so JIT and first-touch costs are not counted
 
@@ -138,7 +140,7 @@ public static class SelfCheck
         Assert(jagged.Length == 3 && jagged[0].Length == 2 && jagged[1].Length == 4 && jagged[2].Length == 1,
             "jagged rows should keep their individual lengths");
 
-        var packets = archive.Flush("probe-7", SensorCategory.Environmental);
+        var packets = archive.Flush("probe-7", SensorCategory.SoilMoisture);
         Assert(packets.Count == 7, $"7 raw samples should become 7 packets, got {packets.Count}");
         Assert(packets is List<TelemetryPacket<float>>, "flush target must be a generic List<T>");
         Assert(Math.Abs(packets[^1].Value - 7f) < 0.001f, "last packet should be the newest cycle's sample");
@@ -240,17 +242,44 @@ public static class SelfCheck
 
     private static void PacketSurvivesJsonRoundTrip(List<string> log)
     {
-        var original = new TelemetryPacket<float>("probe-7", 41.8f, SensorCategory.Environmental);
+        var original = new TelemetryPacket<float>("probe-7", 41.8f, SensorCategory.SoilMoisture);
         var json = JsonSerializer.Serialize(original);
         var restored = JsonSerializer.Deserialize<TelemetryPacket<float>>(json);
 
         Assert(restored == original, $"generic packet should survive the wire; got back {json}");
 
-        var boolPacket = new TelemetryPacket<bool>("valve-3", true, SensorCategory.Actuator);
+        var boolPacket = new TelemetryPacket<bool>("valve-3", true, SensorCategory.IrrigationValve);
         Assert(JsonSerializer.Deserialize<TelemetryPacket<bool>>(JsonSerializer.Serialize(boolPacket)) == boolPacket,
             "the bool payload should survive the wire too");
 
         log.Add("serialisation: TelemetryPacket<float> and <bool> round-trip through JSON");
+    }
+
+    private static void EverySensorIsASpecificAgriculturalDevice(List<string> log)
+    {
+        // Spec() throws for a category with no row, so an enum member added without its
+        // payload and unit fails here instead of on the first registration of that type.
+        var categories = Enum.GetValues<SensorCategory>();
+        var payloads = categories.Select(c => c.Spec().Payload).Distinct().Count();
+        Assert(payloads == 3, "the categories must still exercise float, int and bool payloads");
+
+        var pump = new SensorRegistration { Category = SensorCategory.PumpPower };
+        Assert(pump.Payload == PayloadKind.Integer && pump.Unit == "W", "payload and unit must come from the category");
+
+        // Enum JSON accepts bare numbers, so an undefined category has to die in validation.
+        var bogus = new SensorRegistration
+        {
+            MacAddress = "A4:CF:12:9B:04:7E",
+            DisplayName = "Mystery probe",
+            DeploymentPath = "Facility A/Zone 1",
+            Category = (SensorCategory)99
+        };
+        var results = new List<ValidationResult>();
+        Validator.TryValidateObject(bogus, new ValidationContext(bogus), results, validateAllProperties: true);
+        Assert(results.Count == 1 && results[0].MemberNames.Contains(nameof(SensorRegistration.Category)),
+            "an undefined category must be the one thing validation rejects");
+
+        log.Add($"categories: {categories.Length} agricultural sensor types, payload and unit fixed per type, unknown types rejected");
     }
 
     private static void Assert(bool condition, string because)

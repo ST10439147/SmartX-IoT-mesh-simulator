@@ -83,7 +83,7 @@
             {
                 <details class="suppressed-group">
                     <summary>
-                        @_suppressed.Count suppressed alert(s) &mdash; repeatedly dismissed, kept for audit
+                        @_suppressed.Count suppressed alert(s); repeatedly dismissed, kept for audit
                     </summary>
                     <div class="list-inner">
                         @foreach (var alert in _suppressed)
@@ -133,7 +133,7 @@
 {
     <section class="panel inspector">
         <div class="panel-head">
-            <h2>Inspector &mdash; @_selectedSensor.DisplayName</h2>
+            <h2>Inspector ; @_selectedSensor.DisplayName</h2>
             @if (_selectedAlert is not null)
             {
                 <span class="tag @SeverityClass(_selectedAlert.Severity)">@_selectedAlert.Severity</span>
@@ -145,7 +145,7 @@
             <div>
                 <dl class="kv">
                     <dt>Deployment</dt><dd>@_selectedSensor.DeploymentPath</dd>
-                    <dt>Category</dt><dd>@_selectedSensor.Category</dd>
+                    <dt>Category</dt><dd>@_selectedSensor.Category.Spec().Label</dd>
                     <dt>Payload</dt><dd>TelemetryPacket&lt;@PayloadType(_selectedSensor.Payload)&gt;</dd>
                     <dt>Latest</dt><dd>@Reading(_selectedSensor)@_selectedSensor.Unit</dd>
                     <dt>Baseline</dt><dd>@_selectedSensor.Baseline.ToString("0.##")@_selectedSensor.Unit</dd>
@@ -169,7 +169,7 @@
                     </div>
                     <p class="hint" style="margin-top:.4rem">
                         Dismissing @AnomalyDismissalsToSuppress times suppresses this kind for this node.
-                        Suppressed alerts still fire &mdash; they collapse into the audit group rather than disappearing.
+                        Suppressed alerts still fire ; they collapse into the audit group rather than disappearing.
                     </p>
                 }
             </div>
@@ -232,7 +232,7 @@
 @* ------------------------------------------------------------ operator overloading *@
 <section class="panel inspector">
     <div class="panel-head">
-        <h2>Aggregate two meters</h2>
+        <h2>Aggregate two pump meters</h2>
         <span class="count">Meter3 = Meter1 + Meter2</span>
     </div>
 
@@ -246,7 +246,7 @@
         <div class="field">
             <label for="meter-a">Meter 1</label>
             <select id="meter-a" value="@_aggregateA" @onchange="e => OnAggregateChanged(e, true)">
-                @foreach (var sensor in _numeric)
+                @foreach (var sensor in _meters)
                 {
                     <option value="@sensor.Id">@sensor.DisplayName</option>
                 }
@@ -255,7 +255,7 @@
         <div class="field">
             <label for="meter-b">Meter 2</label>
             <select id="meter-b" value="@_aggregateB" @onchange="e => OnAggregateChanged(e, false)">
-                @foreach (var sensor in _numeric)
+                @foreach (var sensor in _meters)
                 {
                     <option value="@sensor.Id">@sensor.DisplayName</option>
                 }
@@ -264,7 +264,7 @@
     </div>
 
     <div class="actions">
-        <button @onclick="AggregateAsync" disabled="@(_numeric.Count < 2)">Compute</button>
+        <button @onclick="AggregateAsync" disabled="@(_meters.Count < 2)">Compute</button>
     </div>
 
     @if (_aggregate is not null)
@@ -312,7 +312,7 @@
     private SensorSnapshot? _selectedSensor;
     private IReadOnlyList<AttachmentInfo> _selectedAttachments = [];
 
-    private List<SensorSnapshot> _numeric = [];
+    private List<SensorSnapshot> _meters = [];
     private string _aggregateA = string.Empty;
     private string _aggregateB = string.Empty;
     private AggregateResult? _aggregate;
@@ -321,7 +321,7 @@
     {
         // Seed from REST so the page is populated before the first push arrives.
         _snapshots = await Gateway.GetSensorsAsync();
-        RefreshNumeric();
+        RefreshMeters();
         SortAlerts(await Gateway.GetAlertsAsync());
 
         _hub = new HubConnectionBuilder()
@@ -334,7 +334,7 @@
         {
             _snapshots = snapshots;
             _status = status;
-            RefreshNumeric();
+            RefreshMeters();
 
             // Keep the inspector pinned to the same node as fresh data lands.
             if (_selectedSensor is not null)
@@ -397,14 +397,14 @@
         _suppressed = _suppressed.OrderByDescending(a => a.RaisedAt).Take(40).ToList();
     }
 
-    private void RefreshNumeric()
+    private void RefreshMeters()
     {
-        _numeric = _snapshots.Where(s => s.Payload != PayloadKind.Boolean).ToList();
+        _meters = _snapshots.Where(s => s.Category == SensorCategory.PumpPower).ToList();
 
-        if (_numeric.Count >= 2)
+        if (_meters.Count >= 2)
         {
-            if (!_numeric.Any(s => s.Id == _aggregateA)) _aggregateA = _numeric[0].Id;
-            if (!_numeric.Any(s => s.Id == _aggregateB)) _aggregateB = _numeric[1].Id;
+            if (!_meters.Any(s => s.Id == _aggregateA)) _aggregateA = _meters[0].Id;
+            if (!_meters.Any(s => s.Id == _aggregateB)) _aggregateB = _meters[1].Id;
         }
     }
 

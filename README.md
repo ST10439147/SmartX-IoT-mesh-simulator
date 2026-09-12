@@ -69,6 +69,7 @@ Expected output ends with `all checks passed` and exit code 0:
   ok  recursion: 50 000-tier payload stopped at depth 64, no stack overflow
   ok  recursion: cycle in the deployment graph detected and reported
   ok  serialisation: TelemetryPacket<float> and <bool> round-trip through JSON
+  ok  categories: 10 agricultural sensor types, payload and unit fixed per type, unknown types rejected
   ok  crypto: AES-256-GCM round-trips at 0, 1, 1 KB, 64 KB and multi-chunk sizes
   ok  crypto: bit-flips, truncation and wrong keys are all rejected
   ok  uploads: magic-byte sniffing, text validation and path-traversal stripping
@@ -86,12 +87,31 @@ ingest path started boxing, this check fails.
    live; pillars 2 and 3 are visibly disabled and labelled with the Part they arrive in.
    The header shows a real measured round-trip to the API, refreshed every 10 seconds.
 2. **Ingestion** (`/ingestion`) - register a node (MAC, display name, deployment path,
-   category, payload type, publish interval, threshold, unit), attach a config file,
-   hardware log or deployment photo, and validate the deployment tree. A node registered
-   here is adopted by the simulator and starts publishing on the next cycle.
+   sensor category, publish interval, threshold), attach a config file, hardware log or
+   deployment photo, and validate the deployment tree. A node registered here is adopted
+   by the simulator and starts publishing on the next cycle.
 3. **Live dashboard** (`/dashboard`) - the severity-ranked alert rail, the small-multiple
-   sensor grid, the drill-down inspector, and a panel that aggregates two meters through
-   the overloaded `+`.
+   sensor grid, the drill-down inspector, and a panel that aggregates two pump meters
+   through the overloaded `+`.
+
+### Sensor categories
+
+Every node is a specific agricultural device - there is no generic "environmental" or
+"float sensor" option. The category fixes the payload type and unit, so they cannot be
+mismatched at registration (defined once in `SensorCategoryExtensions.Spec`):
+
+| Category | Payload | Unit | Default warning threshold |
+|---|---|---|---|
+| Soil moisture | float | %VWC | 45 (waterlogged) |
+| Soil pH | float | pH | 7.5 (alkaline lock-out) |
+| Air temperature | float | °C | 32 (heat stress) |
+| Relative humidity | float | %RH | 85 (fungal risk) |
+| Irrigation flow | float | L/min | 30 (burst line) |
+| Light intensity | int | lux | 55 000 (leaf scorch) |
+| Water tank level | int | % | 95 (overflow) |
+| Pump power draw | int | W | 3 000 (stalled pump) |
+| Irrigation valve | bool | - | - |
+| Greenhouse vent | bool | - | - |
 
 ### Things worth trying
 
