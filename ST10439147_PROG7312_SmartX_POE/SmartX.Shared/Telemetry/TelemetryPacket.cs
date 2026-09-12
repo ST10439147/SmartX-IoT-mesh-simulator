@@ -26,7 +26,7 @@ public readonly struct TelemetryPacket<T> : IEquatable<TelemetryPacket<T>> where
     public T Value { get; }
     public SensorCategory Category { get; }
     public DateTimeOffset TimestampUtc { get; }
-
+//----------------------------------------------------------------------------------------------------------------------//
     // Two public constructors, so System.Text.Json needs to be told which one rebuilds
     // the struct off the wire.
     [JsonConstructor]
@@ -37,7 +37,7 @@ public readonly struct TelemetryPacket<T> : IEquatable<TelemetryPacket<T>> where
         Category = category;
         TimestampUtc = timestampUtc;
     }
-
+//----------------------------------------------------------------------------------------------------------------------//
     public TelemetryPacket(string sensorId, T value, SensorCategory category)
         : this(sensorId, value, category, DateTimeOffset.UtcNow)
     {
@@ -52,7 +52,7 @@ public readonly struct TelemetryPacket<T> : IEquatable<TelemetryPacket<T>> where
         => SensorId == other.SensorId
            && TimestampUtc == other.TimestampUtc
            && EqualityComparer<T>.Default.Equals(Value, other.Value);
-
+//----------------------------------------------------------------------------------------------------------------------//
     public override bool Equals(object? obj) => obj is TelemetryPacket<T> other && Equals(other);
 
     public override int GetHashCode() => HashCode.Combine(SensorId, Value, TimestampUtc);
