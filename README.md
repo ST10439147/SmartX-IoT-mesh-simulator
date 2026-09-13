@@ -37,11 +37,27 @@ publishing immediately, so the dashboard has live data within a second or two.
 For HTTPS instead, use `--launch-profile https` and open <https://localhost:7030>
 (run `dotnet dev-certs https --trust` once if the browser objects to the certificate).
 
+### Or run it in Docker
+
+From the same directory:
+
+```bash
+docker compose up --build
+```
+
+Then open **<http://localhost:8080>**. On Windows, double-click `docker-setup.bat` instead: it
+starts the container in the background, waits for the gateway to answer, and opens the browser.
+
+The image build runs `--selftest` and fails if any check does. The container runs as
+`Production` and keeps `/app/storage` in the `smartx-storage` volume. Stop it with
+`docker compose down`.
+
 ### Prerequisites
 
 | Requirement | Version | Check |
 |---|---|---|
 | .NET SDK | 10.0 or later | `dotnet --list-sdks` |
+| Docker (Docker route only; replaces the SDK) | Compose v2 | `docker compose version` |
 
 Nothing else. No database, no message broker, no Node toolchain.
 
@@ -60,6 +76,8 @@ dotnet run --project ST10439147_PROG7312_SmartX_POE -- --selftest
 Expected output ends with `all checks passed` and exit code 0:
 
 ```
+SmartX self-check
+----------------------------------------------------------------
   ok  ring buffer: wraps, preserves order, indexes oldest-first
   ok  operators: +, -, unary -, ==, !=, <, >, <=, >= over float and int
   ok  generics: float/int/bool through one wrapper, 0 bytes allocated over 50 000 ingests
@@ -73,6 +91,8 @@ Expected output ends with `all checks passed` and exit code 0:
   ok  crypto: AES-256-GCM round-trips at 0, 1, 1 KB, 64 KB and multi-chunk sizes
   ok  crypto: bit-flips, truncation and wrong keys are all rejected
   ok  uploads: magic-byte sniffing, text validation and path-traversal stripping
+----------------------------------------------------------------
+all checks passed
 ```
 
 That `0 bytes allocated over 50 000 ingests` line is measured with
@@ -154,9 +174,9 @@ DTO translation layer and no chance of the two sides drifting.
 |---|---|
 | **Generics** | `TelemetryPacket<T> where T : struct` carries float, int and bool through one wrapper. `TelemetryStore` keeps a *typed bucket per payload kind* rather than a shared `List<object>` - that is what keeps the ingest path off the boxing path, and the self-check measures it. |
 | **Operator overloading** | `SensorReading<T> where T : struct, INumber<T>` defines `+` (aggregate two meters), `-` (delta), unary `-`, `==`/`!=`, and the four relational operators both against another reading and against a bare `T`, so rule code reads `reading > limit`. |
-| **Arrays** | Ragged poll cycles stage in `float[][]` (each cycle really does return a different sample count), project to a rectangular `float[,]` for the heat map, then flush into `List<TelemetryPacket<float>>`. |
+| **Arrays** | Ragged poll cycles stage in `float[][]` (each cycle really does return a different sample count), project to a rectangular, NaN-padded `float[,]`, then flush into `List<TelemetryPacket<float>>`. `GET /api/sensors/{id}/archive` shows the jagged rows beside the projection's shape. |
 | **Recursion** | `TopologyValidator` walks Facility → Zone → Sub-Zone → Node, reporting issues by breadcrumb path, with a depth ceiling and a cycle guard so a malformed tree is an error rather than a `StackOverflowException`. |
-| **Collections** | `CircularTelemetryBuffer<T>` - fixed-capacity, array-backed, `IEnumerable<T>`. An unbounded stream into a `List<T>` grows until the gateway dies; the ring bounds memory *and* provides exactly the window the anomaly detector needs for its rolling baseline. |
+| **Collections** | `CircularTelemetryBuffer<T>` - fixed-capacity, array-backed, `IEnumerable<TelemetryPacket<T>>`. An unbounded stream into a `List<T>` grows until the gateway dies; the ring bounds memory *and* provides exactly the window the anomaly detector needs for its rolling baseline. |
 | **File upload** | `MultipartReader` streaming (never `IFormFile` buffering), magic-byte content sniffing, path-traversal stripping, a 25 MB ceiling enforced mid-flight, and AES-256-GCM at rest with per-chunk nonces and authenticated chunk indices. |
 | **Engagement** | The strategy chosen in Part 1 Task 1: anomaly-first visual encoding, severity-ranked rail, z-score spike detection against a rolling baseline, a *separate* silence timer for disconnects, and suppression-not-deletion of repeatedly dismissed alerts. |
 
@@ -175,7 +195,7 @@ Base path `/api`. Enums travel as names.
 | `POST` | `/sensors` | Register a node - 400 with field-level errors on invalid input |
 | `DELETE` | `/sensors/{id}` | Deregister |
 | `GET` | `/sensors/{id}/history?samples=n` | Typed `TelemetryPacket<T>` history straight off the ring |
-| `GET` | `/sensors/{id}/archive` | Jagged staging area and its rectangular projection, side by side |
+| `GET` | `/sensors/{id}/archive` | Float sensors only: jagged staging rows, the shape of their rectangular projection, the newest flushed packets |
 | `GET` | `/telemetry/aggregate?a=&b=` | Operator overloading over HTTP: sum, delta, comparison |
 | `GET` | `/alerts?includeSuppressed=` | Severity-ranked alert rail |
 | `POST` | `/alerts/{id}/dismiss` | Dismiss, and count toward suppression of that kind |
@@ -208,7 +228,8 @@ client can be repointed without a rebuild:
 ```
 
 Blank means "the origin that served this page", which is how the hosted setup runs. Set an
-absolute URL to point the dashboard at a remote gateway.
+absolute URL to point the dashboard at a gateway on another origin; the API ships without
+CORS, so add a policy allowing the dashboard's origin first.
 
 Server - `ST10439147_PROG7312_SmartX_POE/appsettings.json`, or environment variables using
 the `SmartX__Key` form:
@@ -232,10 +253,11 @@ On Linux or macOS, `openssl rand -base64 32` does the same job.
 ## Known scope
 
 Telemetry is **simulated** - `MeshSimulator` stands in for the MQTT feed, injecting value
-spikes and node disconnects so the alerting path has something real to catch. It writes
-through the same `TelemetryStore.Ingest` call the HTTP path uses, so swapping in a real
-broker changes nothing downstream.
+spikes and node disconnects so the alerting path has something real to catch. There is no
+HTTP telemetry endpoint; the simulator calls `TelemetryStore.Ingest` directly, so a real
+broker would plug in at that one call and nothing downstream changes.
 
-Gateway state is **in memory** and resets on restart; only attachments survive, on disk
-and encrypted. Persistence, the command stream and mesh routing arrive in Part 2 and the
-final PoE.
+Gateway state is **in memory** and resets on restart: registered nodes, history and alerts
+are lost, and the 12 seeded nodes come back. Uploaded files stay on disk, encrypted, but
+their metadata is in memory too, so after a restart the API no longer lists or serves
+them. Persistence, the command stream and mesh routing arrive in Part 2 and the final PoE.

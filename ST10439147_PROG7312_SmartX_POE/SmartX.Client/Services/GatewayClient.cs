@@ -15,7 +15,7 @@ namespace SmartX.Client.Services;
 public sealed class GatewayClient(HttpClient http)
 {
     public Uri BaseAddress => http.BaseAddress!;
-
+//----------------------------------------------------------------------------------------------------------------------//
     /// <summary>Health ping that also reports how long the round trip took.</summary>
     public async Task<(GatewayStatus? Status, long Milliseconds, string? Error)> PingAsync(CancellationToken ct = default)
     {
@@ -36,7 +36,7 @@ public sealed class GatewayClient(HttpClient http)
             return (null, stopwatch.ElapsedMilliseconds, ex.Message);
         }
     }
-
+//----------------------------------------------------------------------------------------------------------------------//
     public async Task<IReadOnlyList<SensorSnapshot>> GetSensorsAsync(CancellationToken ct = default)
         => await http.GetFromJsonAsync<List<SensorSnapshot>>("api/sensors", SmartXJson.Options, ct) ?? [];
 
@@ -45,7 +45,7 @@ public sealed class GatewayClient(HttpClient http)
 
     public async Task<DeploymentNode?> GetTopologyAsync(CancellationToken ct = default)
         => await http.GetFromJsonAsync<DeploymentNode>("api/topology", SmartXJson.Options, ct);
-
+//----------------------------------------------------------------------------------------------------------------------//
     /// <summary>Registers a node. Field-level errors come straight back from the API's own validation.</summary>
     public async Task<RegistrationOutcome> RegisterAsync(SensorRegistration registration, CancellationToken ct = default)
     {
@@ -63,7 +63,7 @@ public sealed class GatewayClient(HttpClient http)
             ["_"] = [$"The gateway rejected the registration ({(int)response.StatusCode})."]
         });
     }
-
+//----------------------------------------------------------------------------------------------------------------------//
     public async Task<bool> DeleteSensorAsync(string id, CancellationToken ct = default)
         => (await http.DeleteAsync($"api/sensors/{id}", ct)).IsSuccessStatusCode;
 
@@ -78,7 +78,7 @@ public sealed class GatewayClient(HttpClient http)
 
     public async Task<IReadOnlyList<AttachmentInfo>> GetAttachmentsAsync(string sensorId, CancellationToken ct = default)
         => await http.GetFromJsonAsync<List<AttachmentInfo>>($"api/sensors/{sensorId}/attachments", SmartXJson.Options, ct) ?? [];
-
+//----------------------------------------------------------------------------------------------------------------------//
     /// <summary>
     /// Streams the browser file straight into a multipart request. The bytes are never
     /// materialised in the client's memory as one array, and the gateway never buffers
@@ -111,9 +111,9 @@ public sealed class GatewayClient(HttpClient http)
             return (false, null, ex.Message);
         }
     }
-
+//----------------------------------------------------------------------------------------------------------------------//
     public string DownloadUrl(AttachmentInfo info) => new Uri(BaseAddress, $"api/attachments/{info.Id}").ToString();
-
+//----------------------------------------------------------------------------------------------------------------------//
     public async Task<AggregateResult?> AggregateAsync(string a, string b, CancellationToken ct = default)
     {
         var response = await http.GetAsync($"api/telemetry/aggregate?a={Uri.EscapeDataString(a)}&b={Uri.EscapeDataString(b)}", ct);
@@ -121,20 +121,20 @@ public sealed class GatewayClient(HttpClient http)
             ? await response.Content.ReadFromJsonAsync<AggregateResult>(SmartXJson.Options, ct)
             : null;
     }
-
+//----------------------------------------------------------------------------------------------------------------------//
     public async Task<TopologyReport?> ValidateTopologyAsync(DeploymentNode root, CancellationToken ct = default)
     {
         var response = await http.PostAsJsonAsync("api/topology/validate", root, SmartXJson.Options, ct);
         return await response.Content.ReadFromJsonAsync<TopologyReport>(SmartXJson.Options, ct);
     }
-
+//----------------------------------------------------------------------------------------------------------------------//
     public async Task<StressResult?> StressTopologyAsync(int depth, CancellationToken ct = default)
         => await http.GetFromJsonAsync<StressResult>($"api/topology/stress?depth={depth}", SmartXJson.Options, ct);
 
     /// <summary>Mirrors <c>AttachmentService.MaxBytes</c> so the browser rejects an oversized file first.</summary>
     public const long MaxUploadBytes = 25 * 1024 * 1024;
 }
-
+//----------------------------------------------------------------------------------------------------------------------//
 public sealed record RegistrationOutcome(bool Ok, SensorSnapshot? Snapshot, IDictionary<string, string[]> Errors);
 
 public sealed record ValidationProblemResponse(Dictionary<string, string[]> Errors);
@@ -144,7 +144,7 @@ public sealed record MessageResponse(string Message);
 public sealed record AggregateSide(string DisplayName, double Value, string Unit);
 
 public sealed record AggregateValue(string Id, double Value);
-
+//----------------------------------------------------------------------------------------------------------------------//
 public sealed record AggregateResult(
     AggregateSide Left,
     AggregateSide Right,
@@ -152,7 +152,7 @@ public sealed record AggregateResult(
     AggregateValue Delta,
     bool LeftDrawsMore,
     bool Equal);
-
+//----------------------------------------------------------------------------------------------------------------------//
 public sealed record StressResult(
     int RequestedDepth,
     int Ceiling,
