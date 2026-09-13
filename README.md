@@ -14,6 +14,9 @@ port** - no CORS configuration, no second terminal.
 
 ---
 
+## Youtube video link:
+- https://youtu.be/FJqMu1NI1Ys 
+
 ## Quick start
 
 Three commands, from the `ST10439147_PROG7312_SmartX_POE/` directory (the one holding
