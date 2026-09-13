@@ -44,6 +44,10 @@ From the same directory:
 ```bash
 docker compose up --build
 ```
+OR run (Also from the same directory)
+```bash
+docker-setup.bat
+```
 
 Then open **<http://localhost:8080>**. On Windows, double-click `docker-setup.bat` instead: it
 starts the container in the background, waits for the gateway to answer, and opens the browser.
