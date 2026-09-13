@@ -39,18 +39,24 @@ For HTTPS instead, use `--launch-profile https` and open <https://localhost:7030
 
 ### Or run it in Docker
 
-From the same directory:
+From the same directory, on Linux, macOS or Windows:
 
 ```bash
 docker compose up --build
 ```
-OR run (Also from the same directory)
-```bash
+
+Then open **<http://localhost:8080>**.
+
+### **Windows only:**
+ run or double-click
+
+```
 docker-setup.bat
 ```
 
-Then open **<http://localhost:8080>**. On Windows, double-click `docker-setup.bat` instead: it
-starts the container in the background, waits for the gateway to answer, and opens the browser.
+It starts the container in
+the background, waits for the gateway to answer, and opens the browser. It is a Windows batch
+file, so it will not run on Linux or macOS - use `docker compose up --build` there.
 
 The image build runs `--selftest` and fails if any check does. The container runs as
 `Production` and keeps `/app/storage` in the `smartx-storage` volume. Stop it with
