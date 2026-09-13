@@ -167,20 +167,23 @@ public sealed class MeshSimulator(
 
     private void SeedMesh()
     {
-        Add("A4:CF:12:9B:04:7E", "Soil Probe North", "Facility A/Zone 1/Sub-Zone A", SensorCategory.Environmental, PayloadKind.Float, 2, 41, 3.5, 70, "%");
-        Add("A4:CF:12:9B:04:7F", "Soil Probe South", "Facility A/Zone 1/Sub-Zone A", SensorCategory.Environmental, PayloadKind.Float, 2, 38, 3.0, 70, "%");
-        Add("A4:CF:12:9B:05:10", "Canopy Humidity", "Facility A/Zone 1/Sub-Zone B", SensorCategory.Environmental, PayloadKind.Float, 3, 62, 4.0, 85, "%RH");
-        Add("A4:CF:12:9B:05:11", "Air Temp Inlet", "Facility A/Zone 1/Sub-Zone B", SensorCategory.Environmental, PayloadKind.Float, 2, 24, 1.2, 32, "°C");
-        Add("A4:CF:12:9B:05:12", "Air Temp Outlet", "Facility A/Zone 2/Sub-Zone C", SensorCategory.Environmental, PayloadKind.Float, 2, 27, 1.4, 32, "°C");
+        // Field beds
+        Add("A4:CF:12:9B:04:7E", "Soil Moisture North", "Facility A/Zone 1/Sub-Zone A", SensorCategory.SoilMoisture, 2, 31, 2.5);
+        Add("A4:CF:12:9B:04:7F", "Soil Moisture South", "Facility A/Zone 1/Sub-Zone A", SensorCategory.SoilMoisture, 2, 28, 2.5);
+        Add("DC:A6:32:77:11:01", "Drip Line Valve A", "Facility A/Zone 1/Sub-Zone A", SensorCategory.IrrigationValve, 4);
 
-        Add("B8:27:EB:41:02:AA", "Smart Meter 1", "Facility A/Zone 2/Sub-Zone C", SensorCategory.PowerConsumption, PayloadKind.Integer, 2, 2400, 180, 3200, "W");
-        Add("B8:27:EB:41:02:AB", "Smart Meter 2", "Facility A/Zone 2/Sub-Zone C", SensorCategory.PowerConsumption, PayloadKind.Integer, 2, 1850, 140, 3200, "W");
-        Add("B8:27:EB:41:02:AC", "Pump House Draw", "Facility A/Zone 1/Sub-Zone A", SensorCategory.PowerConsumption, PayloadKind.Integer, 3, 940, 90, 1500, "W");
-        Add("B8:27:EB:41:02:AD", "Roof Inverter", "Facility A/Zone 2/Roof Array", SensorCategory.PowerConsumption, PayloadKind.Integer, 2, 3100, 260, 4000, "W");
+        // Greenhouse
+        Add("A4:CF:12:9B:05:10", "Greenhouse Humidity", "Facility A/Zone 1/Sub-Zone B", SensorCategory.RelativeHumidity, 3, 62, 4.0);
+        Add("A4:CF:12:9B:05:11", "Greenhouse Air Temp", "Facility A/Zone 1/Sub-Zone B", SensorCategory.AirTemperature, 2, 24, 1.2);
+        Add("A4:CF:12:9B:05:12", "Root Zone pH", "Facility A/Zone 1/Sub-Zone B", SensorCategory.SoilPh, 5, 6.3, 0.08);
+        Add("A4:CF:12:9B:05:13", "Grow Light Level", "Facility A/Zone 1/Sub-Zone B", SensorCategory.LightIntensity, 3, 32000, 2500);
+        Add("DC:A6:32:77:11:02", "Greenhouse Roof Vent", "Facility A/Zone 1/Sub-Zone B", SensorCategory.GreenhouseVent, 4);
 
-        Add("DC:A6:32:77:11:01", "Irrigation Valve B", "Facility A/Zone 1/Sub-Zone B", SensorCategory.Actuator, PayloadKind.Boolean, 4, 0, 0, 1);
-        Add("DC:A6:32:77:11:02", "Vent Louvre", "Facility A/Zone 1/Sub-Zone A", SensorCategory.Actuator, PayloadKind.Boolean, 4, 0, 0, 1);
-        Add("DC:A6:32:77:11:03", "Grid Transfer Relay", "Facility A/Zone 2/Roof Array", SensorCategory.Actuator, PayloadKind.Boolean, 5, 0, 0, 1);
+        // Pump house and irrigation supply
+        Add("B8:27:EB:41:02:AA", "Borehole Pump", "Facility A/Zone 2/Sub-Zone C", SensorCategory.PumpPower, 2, 2200, 160);
+        Add("B8:27:EB:41:02:AB", "Booster Pump", "Facility A/Zone 2/Sub-Zone C", SensorCategory.PumpPower, 2, 940, 90);
+        Add("A4:CF:12:9B:06:01", "Main Line Flow", "Facility A/Zone 2/Sub-Zone C", SensorCategory.WaterFlow, 2, 18, 1.5);
+        Add("B8:27:EB:41:02:AD", "Rainwater Tank Level", "Facility A/Zone 2/Roof Array", SensorCategory.TankLevel, 5, 74, 2);
     }
 
     /// <summary>
@@ -197,8 +200,7 @@ public sealed class MeshSimulator(
 
     private void Add(
         string mac, string name, string path,
-        SensorCategory category, PayloadKind payload,
-        int interval, double baseline, double noise, double threshold, string unit = "")
+        SensorCategory category, int interval, double baseline = 0, double noise = 0)
     {
         var registered = store.Register(new SensorRegistration
         {
@@ -206,10 +208,8 @@ public sealed class MeshSimulator(
             DisplayName = name,
             DeploymentPath = path,
             Category = category,
-            Payload = payload,
             PublishIntervalSeconds = interval,
-            WarningThreshold = threshold,
-            Unit = unit
+            WarningThreshold = category.Spec().Threshold
         });
 
         _state[registered.Id] = new NodeState { Baseline = baseline, Noise = noise };

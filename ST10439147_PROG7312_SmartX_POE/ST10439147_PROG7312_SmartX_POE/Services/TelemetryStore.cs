@@ -48,7 +48,6 @@ public sealed class TelemetryStore
     {
         sensor.Id = sensor.MacAddress.Replace('-', ':').ToUpperInvariant();
         sensor.RegisteredAt = DateTimeOffset.UtcNow;
-        if (string.IsNullOrWhiteSpace(sensor.Unit)) sensor.Unit = sensor.DefaultUnit();
         _sensors[sensor.Id] = sensor;
 
         switch (sensor.Payload)

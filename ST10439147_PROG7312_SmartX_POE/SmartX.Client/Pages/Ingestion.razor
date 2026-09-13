@@ -78,23 +78,14 @@
 
                 <div class="field">
                     <label for="category">Sensor category</label>
-                    <InputSelect id="category" @bind-Value="_model.Category">
+                    <InputSelect id="category" @bind-Value="_model.Category" @bind-Value:after="ApplyCategoryDefaults">
                         @foreach (var category in Enum.GetValues<SensorCategory>())
                         {
-                            <option value="@category">@Humanise(category)</option>
+                            <option value="@category">@category.Spec().Label</option>
                         }
                     </InputSelect>
-                </div>
-
-                <div class="field">
-                    <label for="payload">Payload type</label>
-                    <InputSelect id="payload" @bind-Value="_model.Payload">
-                        @foreach (var payload in Enum.GetValues<PayloadKind>())
-                        {
-                            <option value="@payload">@PayloadLabel(payload)</option>
-                        }
-                    </InputSelect>
-                    <span class="hint">Picks which typed ring buffer this node writes into.</span>
+                    <span class="hint">@PublishesHint(_model) Payload type and unit are fixed by the category.</span>
+                    <ValidationMessage For="() => _model.Category" class="field-error" />
                 </div>
 
                 <div class="field">
@@ -104,18 +95,16 @@
                     <ValidationMessage For="() => _model.PublishIntervalSeconds" class="field-error" />
                 </div>
 
-                <div class="field">
-                    <label for="threshold">Warning threshold</label>
-                    <InputNumber id="threshold" @bind-Value="_model.WarningThreshold" />
-                    <ValidationMessage For="() => _model.WarningThreshold" class="field-error" />
-                </div>
-
-                <div class="field">
-                    <label for="unit">Unit (optional)</label>
-                    <InputText id="unit" @bind-Value="_model.Unit" placeholder="@_model.DefaultUnit()" autocomplete="off" />
-                    <span class="hint">Blank falls back to @(string.IsNullOrEmpty(_model.DefaultUnit()) ? "no unit" : _model.DefaultUnit()) for this category.</span>
-                    <ValidationMessage For="() => _model.Unit" class="field-error" />
-                </div>
+                @* Valves and vents report a state, not a level, so there is nothing to threshold. *@
+                @if (_model.Payload != PayloadKind.Boolean)
+                {
+                    <div class="field">
+                        <label for="threshold">Warning threshold (@_model.Unit)</label>
+                        <InputNumber id="threshold" @bind-Value="_model.WarningThreshold" />
+                        <span class="hint">Readings above this raise an alert.</span>
+                        <ValidationMessage For="() => _model.WarningThreshold" class="field-error" />
+                    </div>
+                }
             </div>
 
             <div class="actions">
@@ -145,21 +134,21 @@
                 <select id="target" value="@_attachTarget" @onchange="OnTargetChanged">
                     @foreach (var sensor in _sensors)
                     {
-                        <option value="@sensor.Id">@sensor.DisplayName &mdash; @sensor.DeploymentPath</option>
+                        <option value="@sensor.Id">@sensor.DisplayName ; @sensor.DeploymentPath</option>
                     }
                 </select>
             </div>
 
             <div class="dropzone" style="margin-top:.8rem">
                 <div>Device config, hardware log or deployment photo</div>
-                <span class="hint">png, jpg, gif, pdf, log, txt, json, cfg, csv, yaml &mdash; up to 25 MB</span>
+                <span class="hint">png, jpg, gif, pdf, log, txt, json, cfg, csv, yaml ; up to 25 MB</span>
                 <InputFile OnChange="OnFileChosen" accept=".png,.jpg,.jpeg,.gif,.pdf,.log,.txt,.json,.cfg,.conf,.ini,.csv,.yaml,.yml,.md" />
             </div>
 
             @if (_chosen is not null)
             {
                 <div class="toast busy" style="margin-top:.8rem">
-                    <span class="grow">@_chosen.Name &mdash; @Bytes(_chosen.Size)</span>
+                    <span class="grow">@_chosen.Name ; @Bytes(_chosen.Size)</span>
                     <button class="primary tiny" @onclick="UploadAsync" disabled="@_uploading">
                         @(_uploading ? "Streaming..." : "Upload")
                     </button>
@@ -241,7 +230,7 @@
                         {
                             <li>
                                 <span class="tag @(issue.Severity == IssueSeverity.Error ? "crit" : "warn")">@issue.Severity</span>
-                                <span class="grow"><code>@issue.Path</code> &mdash; @issue.Message</span>
+                                <span class="grow"><code>@issue.Path</code> ; @issue.Message</span>
                             </li>
                         }
                     </ul>
@@ -466,26 +455,17 @@
         _validating = false;
     }
 
-    private static SensorRegistration NewModel() => new()
-    {
-        Category = SensorCategory.Environmental,
-        Payload = PayloadKind.Float,
-        PublishIntervalSeconds = 2,
-        WarningThreshold = 80
-    };
+    private static SensorRegistration NewModel() => new();
 
-    private static string Humanise(SensorCategory category) => category switch
-    {
-        SensorCategory.PowerConsumption => "Power consumption",
-        SensorCategory.Actuator => "Actuator",
-        _ => "Environmental"
-    };
+    // A threshold only means something in its category's unit - 45 %VWC is nonsense as
+    // lux - so switching category resets it to that category's default.
+    private void ApplyCategoryDefaults() => _model.WarningThreshold = _model.Category.Spec().Threshold;
 
-    private static string PayloadLabel(PayloadKind payload) => payload switch
+    private static string PublishesHint(SensorRegistration model) => model.Payload switch
     {
-        PayloadKind.Float => "float - continuous reading",
-        PayloadKind.Integer => "int - discrete metric",
-        _ => "bool - on/off state"
+        PayloadKind.Boolean => "Publishes an open/shut state as a bool.",
+        PayloadKind.Integer => $"Publishes {model.Unit} as an int.",
+        _ => $"Publishes {model.Unit} as a float."
     };
 
     private static string Bytes(long bytes) => bytes switch

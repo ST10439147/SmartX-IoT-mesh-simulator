@@ -2,12 +2,45 @@ using System.ComponentModel.DataAnnotations;
 
 namespace SmartX.Shared.Telemetry;
 
-/// <summary>What the node is measuring. Drives grouping and default thresholds.</summary>
+/// <summary>
+/// The specific farm device a node is. There is deliberately no catch-all bucket: the
+/// category alone fixes the payload type, unit and default threshold (see
+/// <see cref="SensorCategoryExtensions.Spec"/>), so a generic "float sensor" cannot exist.
+/// </summary>
 public enum SensorCategory
 {
-    Environmental,
-    PowerConsumption,
-    Actuator
+    SoilMoisture,
+    SoilPh,
+    AirTemperature,
+    RelativeHumidity,
+    LightIntensity,
+    WaterFlow,
+    TankLevel,
+    PumpPower,
+    IrrigationValve,
+    GreenhouseVent
+}
+
+public static class SensorCategoryExtensions
+{
+    /// <summary>
+    /// The one definition of each category. Thresholds are upper limits, because that is
+    /// the only direction the anomaly engine checks.
+    /// </summary>
+    public static (string Label, PayloadKind Payload, string Unit, double Threshold) Spec(this SensorCategory category) => category switch
+    {
+        SensorCategory.SoilMoisture     => ("Soil moisture",     PayloadKind.Float,   "%VWC",  45),     // waterlogged root zone
+        SensorCategory.SoilPh           => ("Soil pH",           PayloadKind.Float,   "pH",    7.5),    // alkaline nutrient lock-out
+        SensorCategory.AirTemperature   => ("Air temperature",   PayloadKind.Float,   "°C",    32),     // crop heat stress
+        SensorCategory.RelativeHumidity => ("Relative humidity", PayloadKind.Float,   "%RH",   85),     // fungal disease risk
+        SensorCategory.LightIntensity   => ("Light intensity",   PayloadKind.Integer, "lux",   55000),  // leaf scorch
+        SensorCategory.WaterFlow        => ("Irrigation flow",   PayloadKind.Float,   "L/min", 30),     // burst line
+        SensorCategory.TankLevel        => ("Water tank level",  PayloadKind.Integer, "%",     95),     // about to overflow
+        SensorCategory.PumpPower        => ("Pump power draw",   PayloadKind.Integer, "W",     3000),   // stalled or dry-running pump
+        SensorCategory.IrrigationValve  => ("Irrigation valve",  PayloadKind.Boolean, "",      0),      // state, not a level: no threshold
+        SensorCategory.GreenhouseVent   => ("Greenhouse vent",   PayloadKind.Boolean, "",      0),
+        _ => throw new ArgumentOutOfRangeException(nameof(category), category, "Not an agricultural sensor category.")
+    };
 }
 
 /// <summary>
@@ -48,41 +81,30 @@ public sealed class SensorRegistration
         ErrorMessage = "Path must be at least Facility/Zone, segments separated by '/'.")]
     public string DeploymentPath { get; set; } = string.Empty;
 
+    // Enum-typed JSON still accepts a bare number, so (SensorCategory)99 is rejected here
+    // at the trust boundary rather than blowing up in Spec() on the ingest path.
     [Required]
-    public SensorCategory Category { get; set; } = SensorCategory.Environmental;
+    [EnumDataType(typeof(SensorCategory), ErrorMessage = "Pick one of the agricultural sensor categories.")]
+    public SensorCategory Category { get; set; } = SensorCategory.SoilMoisture;
 
-    [Required]
-    public PayloadKind Payload { get; set; } = PayloadKind.Float;
+    /// <summary>Derived from <see cref="Category"/>; a soil moisture probe cannot be registered as a bool.</summary>
+    public PayloadKind Payload => Category.Spec().Payload;
 
     /// <summary>Publish interval the node was flashed with. Drives the silence timer.</summary>
     [Range(1, 3600, ErrorMessage = "Publish interval must be between 1 and 3600 seconds.")]
     public int PublishIntervalSeconds { get; set; } = 2;
 
     [Range(-100, 100000, ErrorMessage = "Warning threshold is out of the supported range.")]
-    public double WarningThreshold { get; set; } = 80;
+    public double WarningThreshold { get; set; } = SensorCategory.SoilMoisture.Spec().Threshold;
 
     /// <summary>
-    /// Unit label shown next to the value. Left blank the gateway fills in a sensible
-    /// default for the category - but a category is not a unit, and a humidity probe
-    /// reporting in °C is exactly the kind of wrong that survives a demo and embarrasses
-    /// you in the field. So it stays overridable.
+    /// Derived from <see cref="Category"/> too. A humidity probe reporting in °C is exactly
+    /// the kind of wrong that survives a demo and embarrasses you in the field, so the unit
+    /// is 
     /// </summary>
-    [StringLength(8, ErrorMessage = "Unit labels are short, e.g. °C, %, W, kPa.")]
-    public string Unit { get; set; } = string.Empty;
+    public string Unit => Category.Spec().Unit;
 
     public DateTimeOffset RegisteredAt { get; set; } = DateTimeOffset.UtcNow;
-
-    /// <summary>Fallback used when no unit was supplied at registration.</summary>
-    public string DefaultUnit() => Payload switch
-    {
-        PayloadKind.Boolean => string.Empty,
-        _ => Category switch
-        {
-            SensorCategory.Environmental => "°C",
-            SensorCategory.PowerConsumption => "W",
-            _ => string.Empty
-        }
-    };
 }
 
 /// <summary>Everything the dashboard needs to draw one tile in the sensor grid.</summary>

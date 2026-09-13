@@ -25,7 +25,8 @@ builder.WebHost.ConfigureKestrel(options =>
     // upload cannot be used to fill the gateway's disk.
     options.Limits.MaxRequestBodySize = AttachmentService.MaxBytes + 1024 * 1024;
 });
-
+//----------------------------------------------------------------------------------------------------------------------//
+// The services are singletons because they hold the state of the mesh and its telemetry.
 builder.Services.AddSingleton<TelemetryStore>();
 builder.Services.AddSingleton<AnomalyEngine>();
 builder.Services.AddSingleton<AttachmentService>();
@@ -89,7 +90,7 @@ api.MapPost("/sensors", async (
 
     return Results.Created($"/api/sensors/{saved.Id}", store.Snapshot(saved));
 });
-
+//----------------------------------------------------------------------------------------------------------------------//
 api.MapDelete("/sensors/{id}", async (string id, TelemetryStore store, IHubContext<TelemetryHub> hub) =>
 {
     if (!store.Remove(id)) return Results.NotFound();
@@ -277,5 +278,6 @@ static Dictionary<string, string[]> Validate(object model)
         .ToDictionary(g => g.Key, g => g.Select(x => x.ErrorMessage ?? "Invalid value.").ToArray());
 }
 
+// The request body is a simple JSON object with two properties, so a record is a good fit.
 internal sealed record RestoreRequest(string SensorId, AlertKind Kind);
 //---------------------------DDDDDDDDDDDoooooooooooooo END OF FILE DDDDDDDDDDDoooooooooooooo---------------------------//
