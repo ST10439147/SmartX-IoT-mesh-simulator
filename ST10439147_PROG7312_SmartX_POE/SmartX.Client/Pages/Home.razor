@@ -1,5 +1,7 @@
 @page "/"
-@implements IDisposable
+@using Microsoft.AspNetCore.SignalR.Client
+@using Microsoft.Extensions.DependencyInjection
+@implements IAsyncDisposable
 @inject GatewayClient Gateway
 
 <PageTitle>Smart-X Gateway</PageTitle>
@@ -110,6 +112,7 @@ else
 
 @code {
     private readonly CancellationTokenSource _cts = new();
+    private HubConnection? _hub;
 
     private GatewayStatus? _status;
     private long _latency;
@@ -121,11 +124,34 @@ else
         _status = status;
         _latency = ms;
         _error = error is null ? null : $"Gateway unreachable: {error}";
+
+        // Same push the dashboard listens to: the gateway broadcasts a fresh status every second.
+        _hub = new HubConnectionBuilder()
+            .WithUrl(new Uri(Gateway.BaseAddress, "hubs/telemetry"))
+            .AddJsonProtocol(options => SmartXJson.Configure(options.PayloadSerializerOptions))
+            .WithAutomaticReconnect()
+            .Build();
+
+        _hub.On<List<SensorSnapshot>, GatewayStatus>(HubEvents.Tick, (_, live) =>
+        {
+            _status = live;
+            return InvokeAsync(StateHasChanged);
+        });
+
+        try
+        {
+            await _hub.StartAsync(_cts.Token);
+        }
+        catch (Exception)
+        {
+            // Push unavailable (or the page was left mid-handshake): keep the one-off ping values.
+        }
     }
 
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
         _cts.Cancel();
+        if (_hub is not null) await _hub.DisposeAsync();
         _cts.Dispose();
     }
 }
