@@ -13,6 +13,8 @@ public static class SmartXJson
     public static readonly JsonSerializerOptions Options = Configure(new JsonSerializerOptions(JsonSerializerDefaults.Web));
 
     /// <summary>Applies the SmartX conventions to an existing options object.</summary>
+    // Reference [2]: Microsoft. How to serialize and deserialize JSON using System.Text.Json. Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/standard/serialization/system-text-json/how-to
     public static JsonSerializerOptions Configure(JsonSerializerOptions options)
     {
         // Enums travel as names, so a payload reads "SoilMoisture" rather than "0" -

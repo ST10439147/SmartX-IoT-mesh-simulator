@@ -16,6 +16,10 @@ namespace SmartX.Shared.Telemetry;
 /// <para>The window it keeps is also exactly what the anomaly detector needs for its
 /// rolling mean and standard deviation, so one structure serves both jobs.</para>
 /// </summary>
+// Reference [1]: Microsoft. Generics in C#. Microsoft Learn.
+//   https://learn.microsoft.com/dotnet/csharp/fundamentals/types/generics
+// Reference [12]: Wikipedia. Circular buffer.
+//   https://en.wikipedia.org/wiki/Circular_buffer
 public sealed class CircularTelemetryBuffer<T> : IEnumerable<TelemetryPacket<T>> where T : struct
 {
     private readonly TelemetryPacket<T>[] _items;
@@ -48,6 +52,10 @@ public sealed class CircularTelemetryBuffer<T> : IEnumerable<TelemetryPacket<T>>
     // ponytail: one lock for the whole ring. Ingest is per-sensor so contention is
     // already sharded by having one buffer per node; split further only if a single
     // node ever outruns one core.
+    // Reference [10]: Microsoft. Structure types - readonly struct and in parameters. C# language reference, Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/csharp/language-reference/builtin-types/struct
+    // Reference [12]: Wikipedia. Circular buffer.
+    //   https://en.wikipedia.org/wiki/Circular_buffer
     public void Add(in TelemetryPacket<T> packet)
     {
         lock (_gate)

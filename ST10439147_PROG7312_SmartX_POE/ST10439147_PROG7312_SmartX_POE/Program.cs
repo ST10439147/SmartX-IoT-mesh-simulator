@@ -19,6 +19,8 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.Configure<Microsoft.AspNetCore.Http.Json.JsonOptions>(
     options => SmartXJson.Configure(options.SerializerOptions));
 
+// Reference [25]: Microsoft. Configure options for the ASP.NET Core Kestrel web server - MaxRequestBodySize. Microsoft Learn.
+//   https://learn.microsoft.com/aspnet/core/fundamentals/servers/kestrel/options
 builder.WebHost.ConfigureKestrel(options =>
 {
     // The multipart reader streams, but Kestrel still needs a hard ceiling so a runaway
@@ -30,8 +32,14 @@ builder.WebHost.ConfigureKestrel(options =>
 builder.Services.AddSingleton<TelemetryStore>();
 builder.Services.AddSingleton<AnomalyEngine>();
 builder.Services.AddSingleton<AttachmentService>();
+// Reference [23]: Microsoft. Background tasks with hosted services in ASP.NET Core. Microsoft Learn.
+//   https://learn.microsoft.com/aspnet/core/fundamentals/host/hosted-services
 builder.Services.AddHostedService<MeshSimulator>();
+// Reference [22]: Microsoft. Introduction to ASP.NET Core SignalR. Microsoft Learn.
+//   https://learn.microsoft.com/aspnet/core/signalr/introduction
 builder.Services.AddSignalR().AddJsonProtocol(options => SmartXJson.Configure(options.PayloadSerializerOptions));
+// Reference [7]: Microsoft. Response compression in ASP.NET Core. Microsoft Learn.
+//   https://learn.microsoft.com/aspnet/core/performance/response-compression
 builder.Services.AddResponseCompression(options =>
 {
     options.MimeTypes = ["application/octet-stream", "application/json", "text/css", "application/javascript", "text/html", "application/wasm"];
@@ -43,9 +51,13 @@ app.UseResponseCompression();
 
 // Serve the Blazor WebAssembly client from the same origin as the API. One process, one
 // port, no CORS preflight on every telemetry call.
+// Reference [4]: Microsoft. ASP.NET Core Blazor hosting models. Microsoft Learn.
+//   https://learn.microsoft.com/aspnet/core/blazor/hosting-models
 app.UseBlazorFrameworkFiles();
 app.UseStaticFiles();
 
+// Reference [5]: Microsoft. Minimal APIs overview. Microsoft Learn.
+//   https://learn.microsoft.com/aspnet/core/fundamentals/minimal-apis/overview
 var api = app.MapGroup("/api");
 
 // ---------------------------------------------------------------- gateway health
@@ -65,6 +77,8 @@ api.MapGet("/sensors/{id}", (string id, TelemetryStore store) =>
 api.MapGet("/sensors/{id}/profile", (string id, TelemetryStore store) =>
     store.TryGet(id, out var sensor) ? Results.Ok(sensor) : Results.NotFound());
 
+// Reference [17]: Microsoft. Handle errors in ASP.NET Core - problem details / ValidationProblem. Microsoft Learn.
+//   https://learn.microsoft.com/aspnet/core/fundamentals/minimal-apis/handle-errors
 api.MapPost("/sensors", async (
     SensorRegistration registration,
     TelemetryStore store,
@@ -138,6 +152,8 @@ api.MapGet("/sensors/{id}/archive", (string id, TelemetryStore store) =>
 });
 
 // Operator overloading, exercised over HTTP: Meter3 = Meter1 + Meter2.
+// Reference [8]: Microsoft. Operator overloading - predefined unary, arithmetic and comparison operators. C# language reference, Microsoft Learn.
+//   https://learn.microsoft.com/dotnet/csharp/language-reference/operators/operator-overloading
 api.MapGet("/telemetry/aggregate", ([FromQuery] string a, [FromQuery] string b, TelemetryStore store) =>
 {
     if (!store.TryGet(a, out var left) || !store.TryGet(b, out var right))
@@ -189,6 +205,8 @@ api.MapPost("/topology/validate", (DeploymentNode root) => TopologyValidator.Val
 
 // Proves the depth guard through the API. System.Text.Json refuses to parse a body this
 // deeply nested (its own 64-level ceiling), so the tree is built server-side instead.
+// Reference [16]: Microsoft. StackOverflowException Class (cannot be caught by a try/catch). Microsoft Learn.
+//   https://learn.microsoft.com/dotnet/api/system.stackoverflowexception
 api.MapGet("/topology/stress", ([FromQuery] int depth = 50_000) =>
 {
     depth = Math.Clamp(depth, 1, 200_000);
@@ -223,6 +241,8 @@ api.MapGet("/topology/stress", ([FromQuery] int depth = 50_000) =>
 
 // ---------------------------------------------------------------- attachments
 
+// Reference [24]: Microsoft. Upload files in ASP.NET Core - uploading large files with streaming. Microsoft Learn.
+//   https://learn.microsoft.com/aspnet/core/mvc/models/file-uploads
 api.MapPost("/sensors/{id}/attachments", async (
     string id,
     HttpRequest request,
@@ -267,6 +287,8 @@ app.Run();
 return 0;
 
 // DataAnnotations over the whole object, flattened into the shape ValidationProblem wants.
+// Reference [17]: Microsoft. Handle errors in ASP.NET Core - problem details / ValidationProblem. Microsoft Learn.
+//   https://learn.microsoft.com/aspnet/core/fundamentals/minimal-apis/handle-errors
 static Dictionary<string, string[]> Validate(object model)
 {
     var results = new List<ValidationResult>();

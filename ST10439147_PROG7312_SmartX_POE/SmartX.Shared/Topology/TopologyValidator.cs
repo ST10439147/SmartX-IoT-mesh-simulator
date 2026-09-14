@@ -17,6 +17,7 @@ namespace SmartX.Shared.Topology;
 ///   re-entered, so a tree that has been wired into a graph terminates.</item>
 /// </list>
 /// </summary>
+// Reference [35]: The Independent Institute of Education (2026). PROG7312 Portfolio of Evidence Guide, Part 1. The IIE.
 public static class TopologyValidator
 {
     /// <summary>
@@ -43,6 +44,8 @@ public static class TopologyValidator
     }
 
     /// <summary>Recursive step. One node, its own rules, then each child one tier deeper.</summary>
+    // Reference [16]: Microsoft. StackOverflowException Class (cannot be caught by a try/catch). Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/api/system.stackoverflowexception
     private static void Walk(
         DeploymentNode node,
         DeploymentNode? parent,
@@ -157,6 +160,8 @@ public static class TopologyValidator
         return Descend(root, segments, 1);
     }
 
+    // Reference [16]: Microsoft. StackOverflowException Class (cannot be caught by a try/catch). Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/api/system.stackoverflowexception
     private static bool Descend(DeploymentNode node, string[] segments, int index)
     {
         // Base case: every segment consumed.

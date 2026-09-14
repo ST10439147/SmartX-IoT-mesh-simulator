@@ -33,6 +33,8 @@ public static class SelfCheck
         return log;
     }
 
+    // Reference [12]: Wikipedia. Circular buffer.
+    //   https://en.wikipedia.org/wiki/Circular_buffer
     private static void CircularBufferWrapsAndKeepsOrder(List<string> log)
     {
         var buffer = new CircularTelemetryBuffer<int>(4);
@@ -55,6 +57,10 @@ public static class SelfCheck
         log.Add("ring buffer: wraps, preserves order, indexes oldest-first");
     }
 
+    // Reference [3]: Microsoft. Generic math (System.Numerics.INumber<T>). Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/standard/generics/math
+    // Reference [8]: Microsoft. Operator overloading - predefined unary, arithmetic and comparison operators. C# language reference, Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/csharp/language-reference/operators/operator-overloading
     private static void OperatorsAggregateAndCompare(List<string> log)
     {
         var earlier = DateTimeOffset.UtcNow.AddSeconds(-5);
@@ -95,6 +101,8 @@ public static class SelfCheck
         log.Add("operators: +, -, unary -, ==, !=, <, >, <=, >= over float and int");
     }
 
+    // Reference [1]: Microsoft. Generics in C#. Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/csharp/fundamentals/types/generics
     private static void GenericPacketCarriesAllThreePayloadTypesWithoutBoxing(List<string> log)
     {
         var moisture = new TelemetryPacket<float>("probe-7", 41.8f, SensorCategory.SoilMoisture);
@@ -123,6 +131,10 @@ public static class SelfCheck
         log.Add($"generics: float/int/bool through one wrapper, {allocated} bytes allocated over 50 000 ingests");
     }
 
+    // Reference [13]: Microsoft. Jagged arrays (C# programming guide). Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/csharp/programming-guide/arrays/jagged-arrays
+    // Reference [14]: Microsoft. Multidimensional arrays (C# programming guide). Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/csharp/language-reference/builtin-types/arrays
     private static void JaggedStagingFlushesIntoList(List<string> log)
     {
         var archive = new TelemetryBatchArchive(cycleCapacity: 3);
@@ -204,6 +216,8 @@ public static class SelfCheck
         log.Add("recursion: tier-skipping and duplicate sensor mounts rejected with paths");
     }
 
+    // Reference [16]: Microsoft. StackOverflowException Class (cannot be caught by a try/catch). Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/api/system.stackoverflowexception
     private static void RecursiveValidationSurvivesPathologicalDepth(List<string> log)
     {
         // 50 000 tiers. Without the depth guard this is a StackOverflowException, which
@@ -240,6 +254,8 @@ public static class SelfCheck
         log.Add("recursion: cycle in the deployment graph detected and reported");
     }
 
+    // Reference [2]: Microsoft. How to serialize and deserialize JSON using System.Text.Json. Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/standard/serialization/system-text-json/how-to
     private static void PacketSurvivesJsonRoundTrip(List<string> log)
     {
         var original = new TelemetryPacket<float>("probe-7", 41.8f, SensorCategory.SoilMoisture);

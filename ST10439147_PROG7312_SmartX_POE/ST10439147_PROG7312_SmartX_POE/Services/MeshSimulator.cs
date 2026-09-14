@@ -32,6 +32,10 @@ public sealed class MeshSimulator(
 
     private readonly Dictionary<string, NodeState> _state = new(StringComparer.OrdinalIgnoreCase);
 
+    // Reference [22]: Microsoft. Introduction to ASP.NET Core SignalR. Microsoft Learn.
+    //   https://learn.microsoft.com/aspnet/core/signalr/introduction
+    // Reference [23]: Microsoft. Background tasks with hosted services in ASP.NET Core. Microsoft Learn.
+    //   https://learn.microsoft.com/aspnet/core/fundamentals/host/hosted-services
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         SeedMesh();

@@ -4,6 +4,8 @@
 #
 # Build context is this directory (the one holding ST10439147_PROG7312_SmartX_POE.slnx).
 
+# Reference [34]: Docker. Multi-stage builds. Docker Documentation.
+#   https://docs.docker.com/build/building/multi-stage/
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 

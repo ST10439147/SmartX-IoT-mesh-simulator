@@ -16,6 +16,10 @@ namespace SmartX.Api.Services;
 /// </summary>
 // ponytail: in-memory only, wiped on restart. Swap the dictionaries for a time-series
 // store (or even SQLite) if history has to outlive the process.
+// Reference [1]: Microsoft. Generics in C#. Microsoft Learn.
+//   https://learn.microsoft.com/dotnet/csharp/fundamentals/types/generics
+// Reference [18]: Microsoft. ConcurrentDictionary<TKey,TValue> Class. Microsoft Learn.
+//   https://learn.microsoft.com/dotnet/api/system.collections.concurrent.concurrentdictionary-2
 public sealed class TelemetryStore
 {
     private const int WindowPerSensor = 240;   // ~8 minutes at a 2s publish interval
@@ -81,6 +85,8 @@ public sealed class TelemetryStore
 
     // ---- ingest ------------------------------------------------------------
 
+    // Reference [10]: Microsoft. Structure types - readonly struct and in parameters. C# language reference, Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/csharp/language-reference/builtin-types/struct
     public void Ingest(in TelemetryPacket<float> packet)
     {
         if (_floats.TryGetValue(packet.SensorId, out var buffer)) buffer.Add(in packet);
@@ -100,6 +106,8 @@ public sealed class TelemetryStore
     }
 
     /// <summary>Stages a whole ragged poll cycle in the jagged archive.</summary>
+    // Reference [15]: Microsoft. Span<T> Struct. Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/api/system.span-1
     public void StageCycle(string sensorId, ReadOnlySpan<float> readings, DateTimeOffset at)
     {
         if (_archives.TryGetValue(sensorId, out var archive)) archive.StageCycle(readings, at);

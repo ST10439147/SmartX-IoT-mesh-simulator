@@ -60,6 +60,7 @@ else
     </div>
 }
 
+@* Reference [35]: The Independent Institute of Education (2026). PROG7312 Portfolio of Evidence Guide, Part 1. The IIE. *@
 <div class="pillars">
     <a class="pillar" href="ingestion">
         <span class="step">Pillar 01 &middot; available</span>
@@ -118,6 +119,8 @@ else
     private long _latency;
     private string? _error;
 
+    // Reference [22]: Microsoft. Introduction to ASP.NET Core SignalR. Microsoft Learn.
+    //   https://learn.microsoft.com/aspnet/core/signalr/introduction
     protected override async Task OnInitializedAsync()
     {
         var (status, ms, error) = await Gateway.PingAsync(_cts.Token);
