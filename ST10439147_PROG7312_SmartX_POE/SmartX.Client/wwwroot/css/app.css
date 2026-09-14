@@ -9,6 +9,10 @@
    Layout is fluid: every grid is auto-fit/minmax and every panel is min-width 0,
    so the console reflows from a wall display down to a phone without a single
    fixed pixel width.
+
+   Reference [21]: Wikipedia. Alarm fatigue.
+     https://en.wikipedia.org/wiki/Alarm_fatigue
+   Reference [32]: Tufte, E. R. (1990). Envisioning Information. Cheshire, CT: Graphics Press.
    ------------------------------------------------------------------------ */
 
 :root {

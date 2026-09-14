@@ -43,6 +43,8 @@ public sealed class AttachmentService
 
     public sealed record UploadResult(bool Ok, AttachmentInfo? Attachment, string? Error);
 
+    // Reference [24]: Microsoft. Upload files in ASP.NET Core - uploading large files with streaming. Microsoft Learn.
+    //   https://learn.microsoft.com/aspnet/core/mvc/models/file-uploads
     public async Task<UploadResult> StoreAsync(HttpRequest request, string sensorId, CancellationToken ct)
     {
         if (!_store.Exists(sensorId))
@@ -76,6 +78,10 @@ public sealed class AttachmentService
         return new UploadResult(false, null, "The request contained no file part.");
     }
 
+    // Reference [26]: OWASP. File Upload Cheat Sheet. OWASP Cheat Sheet Series.
+    //   https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
+    // Reference [27]: OWASP. Path Traversal.
+    //   https://owasp.org/www-community/attacks/Path_Traversal
     private async Task<UploadResult> StoreSectionAsync(
         MultipartSection section,
         ContentDispositionHeaderValue disposition,

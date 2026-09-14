@@ -18,6 +18,8 @@ namespace SmartX.Shared.Telemetry;
 /// <para>The archive itself is a ring: cycle <c>N + capacity</c> overwrites cycle
 /// <c>N</c>, so a long-running gateway holds a bounded history.</para>
 /// </summary>
+// Reference [12]: Wikipedia. Circular buffer.
+//   https://en.wikipedia.org/wiki/Circular_buffer
 public sealed class TelemetryBatchArchive
 {
     private readonly float[][] _cycles;
@@ -59,6 +61,10 @@ public sealed class TelemetryBatchArchive
     }
 
     /// <summary>Stages one raw poll cycle. The array is copied; callers may reuse their buffer.</summary>
+    // Reference [13]: Microsoft. Jagged arrays (C# programming guide). Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/csharp/programming-guide/arrays/jagged-arrays
+    // Reference [15]: Microsoft. Span<T> Struct. Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/api/system.span-1
     public void StageCycle(ReadOnlySpan<float> readings, DateTimeOffset at)
     {
         lock (_gate)
@@ -75,6 +81,9 @@ public sealed class TelemetryBatchArchive
     /// <c>List&lt;TelemetryPacket&lt;float&gt;&gt;</c>, at which point the pipeline stops
     /// dealing in bare arrays and works with typed packets only.
     /// </summary>
+    // Reference [13]: Microsoft. Jagged arrays (C# programming guide). Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/csharp/programming-guide/arrays/jagged-arrays
+    // Reference [35]: The Independent Institute of Education (2026). PROG7312 Portfolio of Evidence Guide, Part 1. The IIE.
     public List<TelemetryPacket<float>> Flush(string sensorId, SensorCategory category)
     {
         lock (_gate)
@@ -107,6 +116,8 @@ public sealed class TelemetryBatchArchive
     /// Dense rectangular projection for the heat map. Short rows are padded with
     /// <see cref="float.NaN"/> so "no sample" stays distinguishable from "sampled zero".
     /// </summary>
+    // Reference [14]: Microsoft. Multidimensional arrays (C# programming guide). Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/csharp/language-reference/builtin-types/arrays
     public float[,] ToDenseMatrix()
     {
         lock (_gate)
@@ -132,6 +143,8 @@ public sealed class TelemetryBatchArchive
     }
 
     /// <summary>Jagged view for callers that want the ragged shape preserved, oldest cycle first.</summary>
+    // Reference [13]: Microsoft. Jagged arrays (C# programming guide). Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/csharp/programming-guide/arrays/jagged-arrays
     public float[][] ToJagged()
     {
         lock (_gate)

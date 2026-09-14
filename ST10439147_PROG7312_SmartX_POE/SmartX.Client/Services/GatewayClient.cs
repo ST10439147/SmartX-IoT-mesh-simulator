@@ -17,6 +17,8 @@ public sealed class GatewayClient(HttpClient http)
     public Uri BaseAddress => http.BaseAddress!;
 //----------------------------------------------------------------------------------------------------------------------//
     /// <summary>Health ping that also reports how long the round trip took.</summary>
+    // Reference [33]: Nielsen, J. (1994, updated 2024). 10 Usability Heuristics for User Interface Design - Visibility of system status. Nielsen Norman Group.
+    //   https://www.nngroup.com/articles/ten-usability-heuristics/
     public async Task<(GatewayStatus? Status, long Milliseconds, string? Error)> PingAsync(CancellationToken ct = default)
     {
         var stopwatch = Stopwatch.StartNew();
@@ -47,6 +49,8 @@ public sealed class GatewayClient(HttpClient http)
         => await http.GetFromJsonAsync<DeploymentNode>("api/topology", SmartXJson.Options, ct);
 //----------------------------------------------------------------------------------------------------------------------//
     /// <summary>Registers a node. Field-level errors come straight back from the API's own validation.</summary>
+    // Reference [17]: Microsoft. Handle errors in ASP.NET Core - problem details / ValidationProblem. Microsoft Learn.
+    //   https://learn.microsoft.com/aspnet/core/fundamentals/minimal-apis/handle-errors
     public async Task<RegistrationOutcome> RegisterAsync(SensorRegistration registration, CancellationToken ct = default)
     {
         var response = await http.PostAsJsonAsync("api/sensors", registration, SmartXJson.Options, ct);
@@ -84,6 +88,8 @@ public sealed class GatewayClient(HttpClient http)
     /// materialised in the client's memory as one array, and the gateway never buffers
     /// them either - the whole path is a stream from disk to disk.
     /// </summary>
+    // Reference [24]: Microsoft. Upload files in ASP.NET Core - uploading large files with streaming. Microsoft Learn.
+    //   https://learn.microsoft.com/aspnet/core/mvc/models/file-uploads
     public async Task<(bool Ok, AttachmentInfo? Attachment, string? Error)> UploadAsync(
         string sensorId, IBrowserFile file, CancellationToken ct = default)
     {

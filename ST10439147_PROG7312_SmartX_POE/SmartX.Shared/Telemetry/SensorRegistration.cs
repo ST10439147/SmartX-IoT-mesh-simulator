@@ -56,6 +56,8 @@ public enum PayloadKind
 }
 
 /// <summary>A sensor profile as submitted by the dashboard and stored by the gateway.</summary>
+// Reference [31]: Microsoft. ASP.NET Core Blazor forms validation. Microsoft Learn.
+//   https://learn.microsoft.com/aspnet/core/blazor/forms/validation
 public sealed class SensorRegistration
 {
     /// <summary>Assigned by the gateway on registration; the MAC is the natural key.</summary>

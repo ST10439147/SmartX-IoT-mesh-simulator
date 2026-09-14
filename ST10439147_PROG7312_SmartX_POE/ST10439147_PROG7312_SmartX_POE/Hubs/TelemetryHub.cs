@@ -10,6 +10,8 @@ namespace SmartX.Api.Hubs;
 /// <para>Message names live in <see cref="SmartX.Shared.HubEvents"/> so both ends of the
 /// wire read them from the same constant.</para>
 /// </summary>
+// Reference [22]: Microsoft. Introduction to ASP.NET Core SignalR. Microsoft Learn.
+//   https://learn.microsoft.com/aspnet/core/signalr/introduction
 public sealed class TelemetryHub : Hub
 {
     /// <summary>Client-callable ping, used by the dashboard to display live round-trip latency.</summary>

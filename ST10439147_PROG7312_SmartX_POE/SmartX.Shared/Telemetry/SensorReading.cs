@@ -15,6 +15,10 @@ namespace SmartX.Shared.Telemetry;
 /// if (probeNow > 80f) RaiseAlert();     // compare straight against a bare float
 /// </code>
 /// </summary>
+// Reference [3]: Microsoft. Generic math (System.Numerics.INumber<T>). Microsoft Learn.
+//   https://learn.microsoft.com/dotnet/standard/generics/math
+// Reference [10]: Microsoft. Structure types - readonly struct and in parameters. C# language reference, Microsoft Learn.
+//   https://learn.microsoft.com/dotnet/csharp/language-reference/builtin-types/struct
 public readonly struct SensorReading<T> : IEquatable<SensorReading<T>>, IComparable<SensorReading<T>>
     where T : struct, INumber<T>
 {
@@ -42,6 +46,8 @@ public readonly struct SensorReading<T> : IEquatable<SensorReading<T>>, ICompara
     // takes the later timestamp because an aggregate is only as fresh as its
     // stalest input... which is the earlier one, hence Min, not Max.
 
+    // Reference [8]: Microsoft. Operator overloading - predefined unary, arithmetic and comparison operators. C# language reference, Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/csharp/language-reference/operators/operator-overloading
     public static SensorReading<T> operator +(SensorReading<T> left, SensorReading<T> right)
         => new($"{left.SensorId}+{right.SensorId}",
                left.Value + right.Value,
@@ -60,6 +66,8 @@ public readonly struct SensorReading<T> : IEquatable<SensorReading<T>>, ICompara
     // Overloading == obliges us to override Equals and GetHashCode and to
     // implement IEquatable<T>, otherwise the two comparison paths disagree.
 
+    // Reference [11]: Microsoft. How to define value equality for a type. Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/csharp/programming-guide/statements-expressions-operators/how-to-define-value-equality-for-a-type
     public bool Equals(SensorReading<T> other)
         => SensorId == other.SensorId
            && Value == other.Value
@@ -77,6 +85,8 @@ public readonly struct SensorReading<T> : IEquatable<SensorReading<T>>, ICompara
     // C# requires these in pairs: > with <, and >= with <=.
     // Ordering compares magnitude only; the id is irrelevant to "is this hotter".
 
+    // Reference [8]: Microsoft. Operator overloading - predefined unary, arithmetic and comparison operators. C# language reference, Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/csharp/language-reference/operators/operator-overloading
     public int CompareTo(SensorReading<T> other) => Value.CompareTo(other.Value);
 
     public static bool operator >(SensorReading<T> left, SensorReading<T> right) => left.Value > right.Value;
@@ -115,6 +125,8 @@ public static class SensorReadingExtensions
     /// Total load across a set of meters, folded with <c>operator +</c>.
     /// <c>T.Zero</c> is the identity element supplied by generic math.
     /// </summary>
+    // Reference [3]: Microsoft. Generic math (System.Numerics.INumber<T>). Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/standard/generics/math
     public static SensorReading<T> Sum<T>(this IEnumerable<SensorReading<T>> readings)
         where T : struct, INumber<T>
     {

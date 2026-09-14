@@ -23,9 +23,14 @@ namespace SmartX.Api.Services;
 /// rail collapses it into an auditable group instead of discarding it. Hiding a genuine
 /// fault is the failure mode this design has to avoid.</para>
 /// </summary>
+// Reference [35]: The Independent Institute of Education (2026). PROG7312 Portfolio of Evidence Guide, Part 1. The IIE.
 public sealed class AnomalyEngine(TelemetryStore store, ILogger<AnomalyEngine> logger)
 {
     /// <summary>Deviations beyond three sigma are the classic "this is not normal noise" line.</summary>
+    // Reference [19]: Wikipedia. Standard score (z-score).
+    //   https://en.wikipedia.org/wiki/Standard_score
+    // Reference [20]: Wikipedia. 68-95-99.7 rule (three-sigma rule of thumb).
+    //   https://en.wikipedia.org/wiki/68%E2%80%9395%E2%80%9399.7_rule
     public const double SpikeZScore = 3.0;
 
     /// <summary>Below this, the baseline is not yet trustworthy and everything looks anomalous.</summary>
@@ -37,11 +42,17 @@ public sealed class AnomalyEngine(TelemetryStore store, ILogger<AnomalyEngine> l
     private const int MaxAlerts = 200;
     private static readonly TimeSpan Debounce = TimeSpan.FromSeconds(20);
 
+    // Reference [18]: Microsoft. ConcurrentDictionary<TKey,TValue> Class. Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/api/system.collections.concurrent.concurrentdictionary-2
     private readonly ConcurrentDictionary<string, Alert> _alerts = new();
     private readonly ConcurrentDictionary<string, int> _dismissals = new();
     private readonly ConcurrentDictionary<string, DateTimeOffset> _lastRaised = new();
 
     /// <summary>Evaluates one node against its own history. Returns an alert only if something changed.</summary>
+    // Reference [19]: Wikipedia. Standard score (z-score).
+    //   https://en.wikipedia.org/wiki/Standard_score
+    // Reference [21]: Wikipedia. Alarm fatigue.
+    //   https://en.wikipedia.org/wiki/Alarm_fatigue
     public Alert? Evaluate(SensorRegistration sensor)
     {
         var window = store.Window(sensor.Id, 120);
@@ -194,6 +205,8 @@ public sealed class AnomalyEngine(TelemetryStore store, ILogger<AnomalyEngine> l
     /// Dismissing removes this alert and counts against its kind. Past the threshold the
     /// kind is auto-suppressed for that node - the alert-fatigue feedback loop.
     /// </summary>
+    // Reference [21]: Wikipedia. Alarm fatigue.
+    //   https://en.wikipedia.org/wiki/Alarm_fatigue
     public bool Dismiss(string alertId)
     {
         if (!_alerts.TryRemove(alertId, out var alert)) return false;

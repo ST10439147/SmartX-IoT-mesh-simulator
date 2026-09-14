@@ -317,6 +317,8 @@
     private string _aggregateB = string.Empty;
     private AggregateResult? _aggregate;
 
+    // Reference [22]: Microsoft. Introduction to ASP.NET Core SignalR. Microsoft Learn.
+    //   https://learn.microsoft.com/aspnet/core/signalr/introduction
     protected override async Task OnInitializedAsync()
     {
         // Seed from REST so the page is populated before the first push arrives.
@@ -391,6 +393,8 @@
     }
 
     /// <summary>Severity first, then recency. This ordering is the whole point of the rail.</summary>
+    // Reference [21]: Wikipedia. Alarm fatigue.
+    //   https://en.wikipedia.org/wiki/Alarm_fatigue
     private void Rank()
     {
         _active = _active.OrderByDescending(a => a.Severity).ThenByDescending(a => a.RaisedAt).Take(40).ToList();

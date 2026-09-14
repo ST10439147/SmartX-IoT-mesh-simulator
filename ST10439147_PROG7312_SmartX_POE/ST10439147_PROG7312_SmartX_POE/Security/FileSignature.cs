@@ -32,6 +32,10 @@ public static class FileSignature
         ".log", ".txt", ".json", ".cfg", ".conf", ".ini", ".csv", ".yaml", ".yml", ".env", ".md"
     };
 
+    // Reference [15]: Microsoft. Span<T> Struct. Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/api/system.span-1
+    // Reference [26]: OWASP. File Upload Cheat Sheet. OWASP Cheat Sheet Series.
+    //   https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
     public static Verdict Inspect(string fileName, ReadOnlySpan<byte> head)
     {
         var extension = Path.GetExtension(fileName);
@@ -76,6 +80,8 @@ public static class FileSignature
     /// Strips any path the client tried to smuggle in the filename, so an upload named
     /// <c>../../appsettings.json</c> cannot escape the attachment directory.
     /// </summary>
+    // Reference [27]: OWASP. Path Traversal.
+    //   https://owasp.org/www-community/attacks/Path_Traversal
     public static string SanitiseFileName(string? fileName)
     {
         var name = Path.GetFileName(fileName ?? string.Empty).Trim();

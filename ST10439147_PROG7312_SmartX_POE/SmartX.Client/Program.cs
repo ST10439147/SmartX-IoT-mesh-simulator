@@ -3,6 +3,8 @@ using Microsoft.AspNetCore.Components.WebAssembly.Hosting;
 using SmartX.Client;
 using SmartX.Client.Services;
 
+// Reference [4]: Microsoft. ASP.NET Core Blazor hosting models. Microsoft Learn.
+//   https://learn.microsoft.com/aspnet/core/blazor/hosting-models
 var builder = WebAssemblyHostBuilder.CreateDefault(args);
 builder.RootComponents.Add<App>("#app");
 builder.RootComponents.Add<HeadOutlet>("head::after");
@@ -17,6 +19,8 @@ var baseAddress = string.IsNullOrWhiteSpace(configured) ? builder.HostEnvironmen
 builder.Services.AddScoped(_ => new HttpClient
 {
     BaseAddress = new Uri(baseAddress),
+    // Reference [6]: Microsoft. HttpClient.Timeout Property. Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/api/system.net.http.httpclient.timeout
     Timeout = TimeSpan.FromMinutes(5)   // uploads are streamed and can outlive the default
 });
 

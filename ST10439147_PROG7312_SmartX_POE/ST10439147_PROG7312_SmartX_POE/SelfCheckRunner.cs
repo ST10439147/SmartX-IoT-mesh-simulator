@@ -38,6 +38,12 @@ internal static class SelfCheckRunner
         return 0;
     }
 
+    // Reference [26]: OWASP. File Upload Cheat Sheet. OWASP Cheat Sheet Series.
+    //   https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
+    // Reference [27]: OWASP. Path Traversal.
+    //   https://owasp.org/www-community/attacks/Path_Traversal
+    // Reference [28]: Microsoft. AesGcm Class. Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/api/system.security.cryptography.aesgcm
     private static IEnumerable<string> RunCryptoChecks()
     {
         var log = new List<string>();

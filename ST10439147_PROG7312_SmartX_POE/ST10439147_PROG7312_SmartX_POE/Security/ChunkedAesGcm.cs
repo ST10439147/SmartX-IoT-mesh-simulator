@@ -39,6 +39,12 @@ public static class ChunkedAesGcm
     private static ReadOnlySpan<byte> Magic => "SXA1"u8;
 
     /// <summary>Encrypts <paramref name="source"/> into <paramref name="destination"/>. Returns plaintext bytes consumed.</summary>
+    // Reference [28]: Microsoft. AesGcm Class. Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/api/system.security.cryptography.aesgcm
+    // Reference [29]: Dworkin, M. (2007). NIST Special Publication 800-38D: Recommendation for Block Cipher Modes of Operation: Galois/Counter Mode (GCM) and GMAC. NIST.
+    //   https://doi.org/10.6028/NIST.SP.800-38D
+    // Reference [30]: McGrew, D. (2008). RFC 5116: An Interface and Algorithms for Authenticated Encryption. IETF.
+    //   https://www.rfc-editor.org/rfc/rfc5116
     public static async Task<long> EncryptAsync(Stream source, Stream destination, byte[] key, CancellationToken ct = default)
     {
         ValidateKey(key);
@@ -98,6 +104,10 @@ public static class ChunkedAesGcm
     /// Decrypts and verifies. Throws <see cref="CryptographicException"/> if any frame
     /// has been altered, reordered, or if the stream was truncated before its final frame.
     /// </summary>
+    // Reference [28]: Microsoft. AesGcm Class. Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/api/system.security.cryptography.aesgcm
+    // Reference [30]: McGrew, D. (2008). RFC 5116: An Interface and Algorithms for Authenticated Encryption. IETF.
+    //   https://www.rfc-editor.org/rfc/rfc5116
     public static async Task<long> DecryptAsync(Stream source, Stream destination, byte[] key, CancellationToken ct = default)
     {
         ValidateKey(key);

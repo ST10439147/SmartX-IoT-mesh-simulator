@@ -28,6 +28,8 @@ public sealed class InspectedUploadStream(ReadOnlyMemory<byte> head, Stream inne
     /// <summary>Lowercase hex SHA-256 of the plaintext. Valid once the stream is fully read.</summary>
     public string Sha256 => Convert.ToHexString(_digest ??= _hash.GetHashAndReset()).ToLowerInvariant();
 
+    // Reference [26]: OWASP. File Upload Cheat Sheet. OWASP Cheat Sheet Series.
+    //   https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
     public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
     {
         int read;
