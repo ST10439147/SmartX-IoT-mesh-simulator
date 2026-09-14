@@ -31,6 +31,7 @@ public sealed class MeshSimulator(
     private readonly Random _random = new(7312);
 
     private readonly Dictionary<string, NodeState> _state = new(StringComparer.OrdinalIgnoreCase);
+    //----------------------------------------------------------------------------------------------------------------------//
 
     // Reference [22]: Microsoft. Introduction to ASP.NET Core SignalR. Microsoft Learn.
     //   https://learn.microsoft.com/aspnet/core/signalr/introduction
@@ -87,7 +88,7 @@ public sealed class MeshSimulator(
             }
         }
     }
-
+//----------------------------------------------------------------------------------------------------------------------//
     // WaitForNextTickAsync throws OperationCanceledException on shutdown; the loop
     // just needs to end, so swallow it here rather than let it escape ExecuteAsync.
     private static async ValueTask<bool> WaitForTickAsync(PeriodicTimer timer, CancellationToken token)
@@ -101,7 +102,7 @@ public sealed class MeshSimulator(
             return false;
         }
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     private void PublishCycle(int elapsed)
     {
         foreach (var sensor in store.Sensors)
@@ -168,7 +169,7 @@ public sealed class MeshSimulator(
                 _ = hub.Clients.All.SendAsync(HubEvents.AlertRaised, alert, CancellationToken.None);
         }
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     private void SeedMesh()
     {
         // Field beds
@@ -190,6 +191,8 @@ public sealed class MeshSimulator(
         Add("B8:27:EB:41:02:AD", "Rainwater Tank Level", "Facility A/Zone 2/Roof Array", SensorCategory.TankLevel, 5, 74, 2);
     }
 
+    //----------------------------------------------------------------------------------------------------------------------//
+
     /// <summary>
     /// Derives a plausible signal for a node the operator registered by hand. The
     /// warning threshold is the only hint the registration gives about magnitude, so the
@@ -201,6 +204,7 @@ public sealed class MeshSimulator(
         Baseline = sensor.Payload == PayloadKind.Boolean ? 0 : sensor.WarningThreshold * 0.6,
         Noise = sensor.Payload == PayloadKind.Boolean ? 0 : Math.Max(0.5, sensor.WarningThreshold * 0.04)
     };
+    //----------------------------------------------------------------------------------------------------------------------//
 
     private void Add(
         string mac, string name, string path,
@@ -218,7 +222,7 @@ public sealed class MeshSimulator(
 
         _state[registered.Id] = new NodeState { Baseline = baseline, Noise = noise };
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     /// <summary>Per-node simulation state: where the signal sits and how far it wanders.</summary>
     private sealed class NodeState
     {
@@ -227,7 +231,7 @@ public sealed class MeshSimulator(
         public bool Flag;
         public int MutedUntil;
         private double _drift;
-
+        //----------------------------------------------------------------------------------------------------------------------//
         public float NextFloat(Random random, bool spiking)
         {
             // Slow random walk so the baseline moves like a real environment rather

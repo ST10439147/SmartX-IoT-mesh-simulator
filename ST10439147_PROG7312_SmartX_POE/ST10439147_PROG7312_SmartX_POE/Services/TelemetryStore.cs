@@ -46,6 +46,7 @@ public sealed class TelemetryStore
     public bool TryGet(string id, out SensorRegistration sensor) => _sensors.TryGetValue(id, out sensor!);
 
     public bool Exists(string id) => _sensors.ContainsKey(id);
+    //----------------------------------------------------------------------------------------------------------------------//
 
     /// <summary>Registers a node and allocates its typed ring buffer. Idempotent on the MAC.</summary>
     public SensorRegistration Register(SensorRegistration sensor)
@@ -71,7 +72,7 @@ public sealed class TelemetryStore
         _attachments.TryAdd(sensor.Id, []);
         return sensor;
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     public bool Remove(string id)
     {
         _floats.TryRemove(id, out _);
@@ -92,19 +93,19 @@ public sealed class TelemetryStore
         if (_floats.TryGetValue(packet.SensorId, out var buffer)) buffer.Add(in packet);
         Touch(packet.SensorId, packet.TimestampUtc);
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     public void Ingest(in TelemetryPacket<int> packet)
     {
         if (_integers.TryGetValue(packet.SensorId, out var buffer)) buffer.Add(in packet);
         Touch(packet.SensorId, packet.TimestampUtc);
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     public void Ingest(in TelemetryPacket<bool> packet)
     {
         if (_booleans.TryGetValue(packet.SensorId, out var buffer)) buffer.Add(in packet);
         Touch(packet.SensorId, packet.TimestampUtc);
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     /// <summary>Stages a whole ragged poll cycle in the jagged archive.</summary>
     // Reference [15]: Microsoft. Span<T> Struct. Microsoft Learn.
     //   https://learn.microsoft.com/dotnet/api/system.span-1
@@ -112,7 +113,7 @@ public sealed class TelemetryStore
     {
         if (_archives.TryGetValue(sensorId, out var archive)) archive.StageCycle(readings, at);
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     private void Touch(string sensorId, DateTimeOffset at)
     {
         _lastSeen[sensorId] = at;
@@ -135,6 +136,7 @@ public sealed class TelemetryStore
 
     public TelemetryBatchArchive? Archive(string sensorId)
         => _archives.GetValueOrDefault(sensorId);
+    //----------------------------------------------------------------------------------------------------------------------//
 
     /// <summary>Latest value as a double for display purposes only; the stored packet keeps its real type.</summary>
     public double LatestNumeric(string sensorId)
@@ -144,7 +146,7 @@ public sealed class TelemetryStore
         if (_booleans.TryGetValue(sensorId, out var b) && b.TryGetNewest(out var bp)) return bp.Value ? 1 : 0;
         return double.NaN;
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     public IReadOnlyList<double> Window(string sensorId, int samples)
     {
         if (_floats.TryGetValue(sensorId, out var f))
@@ -155,7 +157,7 @@ public sealed class TelemetryStore
             return b.TakeLast(samples).Select(p => p.Value ? 1d : 0d).ToList();
         return [];
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     public IReadOnlyList<ContextSample> ContextAround(string sensorId, DateTimeOffset at, int span = 4)
     {
         var packets = _floats.TryGetValue(sensorId, out var f)
@@ -179,7 +181,7 @@ public sealed class TelemetryStore
             .Select((p, index) => new ContextSample(p.TimestampUtc, p.Item2, start + index == offending))
             .ToList();
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     public long PacketCount(string sensorId)
     {
         if (_floats.TryGetValue(sensorId, out var f)) return f.TotalWritten;
@@ -195,13 +197,13 @@ public sealed class TelemetryStore
         var list = _attachments.GetOrAdd(info.SensorId, _ => []);
         lock (list) list.Add(info);
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     public IReadOnlyList<AttachmentInfo> Attachments(string sensorId)
     {
         if (!_attachments.TryGetValue(sensorId, out var list)) return [];
         lock (list) return list.ToList();
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     public AttachmentInfo? FindAttachment(string attachmentId)
     {
         foreach (var list in _attachments.Values)
@@ -215,7 +217,7 @@ public sealed class TelemetryStore
 
         return null;
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     /// <summary>Seed hierarchy: Facility A &gt; Zone 1..2 &gt; Sub-Zone A..B &gt; nodes.</summary>
     private static DeploymentNode SeedTopology() =>
         DeploymentNode.Create("Facility A", NodeKind.Facility,

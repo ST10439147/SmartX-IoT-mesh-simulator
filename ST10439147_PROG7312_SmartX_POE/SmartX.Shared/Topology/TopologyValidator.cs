@@ -42,7 +42,7 @@ public static class TopologyValidator
         var valid = !issues.Any(i => i.Severity == IssueSeverity.Error);
         return new TopologyReport(valid, state.Visited, state.MaxDepth, issues);
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     /// <summary>Recursive step. One node, its own rules, then each child one tier deeper.</summary>
     // Reference [16]: Microsoft. StackOverflowException Class (cannot be caught by a try/catch). Microsoft Learn.
     //   https://learn.microsoft.com/dotnet/api/system.stackoverflowexception
@@ -91,7 +91,7 @@ public static class TopologyValidator
         // --- base case: a leaf simply has nothing to iterate, and we unwind here.
         state.OnPath.Remove(node);
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     private static void ValidateNode(
         DeploymentNode node,
         DeploymentNode? parent,
@@ -146,7 +146,7 @@ public static class TopologyValidator
         foreach (var duplicate in duplicates)
             issues.Add(new TopologyIssue(here, $"Contains {node.Children.Count(c => string.Equals(c.Name, duplicate, StringComparison.OrdinalIgnoreCase))} children named '{duplicate}'.", IssueSeverity.Error));
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     /// <summary>
     /// Checks that a slash-delimited path such as
     /// <c>Facility A/Zone 1/Sub-Zone B/node-3</c> actually resolves in the tree.
@@ -179,7 +179,7 @@ public static class TopologyValidator
 
         return false;
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     /// <summary>Mutable bookkeeping carried down the recursion.</summary>
     private sealed class WalkState
     {

@@ -47,7 +47,7 @@ public sealed class AnomalyEngine(TelemetryStore store, ILogger<AnomalyEngine> l
     private readonly ConcurrentDictionary<string, Alert> _alerts = new();
     private readonly ConcurrentDictionary<string, int> _dismissals = new();
     private readonly ConcurrentDictionary<string, DateTimeOffset> _lastRaised = new();
-
+    //----------------------------------------------------------------------------------------------------------------------//
     /// <summary>Evaluates one node against its own history. Returns an alert only if something changed.</summary>
     // Reference [19]: Wikipedia. Standard score (z-score).
     //   https://en.wikipedia.org/wiki/Standard_score
@@ -112,7 +112,7 @@ public sealed class AnomalyEngine(TelemetryStore store, ILogger<AnomalyEngine> l
 
         return null;
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     /// <summary>
     /// Silence sweep. A node is considered lost once it has missed three publish
     /// intervals - one missed interval is jitter, three is a disconnect.
@@ -144,7 +144,7 @@ public sealed class AnomalyEngine(TelemetryStore store, ILogger<AnomalyEngine> l
 
         return raised;
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     private Alert? Raise(
         SensorRegistration sensor,
         AlertKind kind,
@@ -187,7 +187,7 @@ public sealed class AnomalyEngine(TelemetryStore store, ILogger<AnomalyEngine> l
         logger.LogInformation("{Severity} {Kind} on {Sensor}: {Message}", severity, kind, sensor.DisplayName, message);
         return alert;
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     /// <summary>Rail order: severity first, then most recent. Suppressed alerts sink to the bottom.</summary>
     public IReadOnlyList<Alert> Ranked(bool includeSuppressed = true) =>
         _alerts.Values
@@ -196,11 +196,11 @@ public sealed class AnomalyEngine(TelemetryStore store, ILogger<AnomalyEngine> l
             .ThenByDescending(a => a.Severity)
             .ThenByDescending(a => a.RaisedAt)
             .ToList();
-
+    //----------------------------------------------------------------------------------------------------------------------//
     public int ActiveCount => _alerts.Values.Count(a => !a.Suppressed);
 
     public int SuppressedCount => _alerts.Values.Count(a => a.Suppressed);
-
+    //----------------------------------------------------------------------------------------------------------------------//
     /// <summary>
     /// Dismissing removes this alert and counts against its kind. Past the threshold the
     /// kind is auto-suppressed for that node - the alert-fatigue feedback loop.
@@ -219,7 +219,7 @@ public sealed class AnomalyEngine(TelemetryStore store, ILogger<AnomalyEngine> l
 
         return true;
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     /// <summary>Undo suppression for a node and kind, so a collapsed group can be re-opened.</summary>
     public void Restore(string sensorId, AlertKind kind)
     {
@@ -231,7 +231,7 @@ public sealed class AnomalyEngine(TelemetryStore store, ILogger<AnomalyEngine> l
                 _alerts[id] = alert with { Suppressed = false };
         }
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     public void Clear() => _alerts.Clear();
 
     private void Evict()

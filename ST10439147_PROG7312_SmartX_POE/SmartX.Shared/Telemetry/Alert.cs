@@ -22,7 +22,7 @@ public enum AlertKind
 
 /// <summary>One packet either side of the offending reading, for the drill-down inspector.</summary>
 public sealed record ContextSample(DateTimeOffset At, double Value, bool IsOffending);
-
+//----------------------------------------------------------------------------------------------------------------------//
 /// <summary>
 /// A finding on the alert rail. Ranked by <see cref="Severity"/> then recency; alerts of
 /// a kind the operator has repeatedly dismissed arrive with <see cref="Suppressed"/> set
@@ -43,7 +43,7 @@ public sealed record Alert(
     DateTimeOffset RaisedAt,
     bool Suppressed,
     IReadOnlyList<ContextSample> Context);
-
+//----------------------------------------------------------------------------------------------------------------------//
 /// <summary>Header counters for the dashboard.</summary>
 public sealed record GatewayStatus(
     string Version,

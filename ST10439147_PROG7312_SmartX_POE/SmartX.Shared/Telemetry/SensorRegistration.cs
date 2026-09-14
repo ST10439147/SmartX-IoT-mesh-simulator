@@ -42,7 +42,7 @@ public static class SensorCategoryExtensions
         _ => throw new ArgumentOutOfRangeException(nameof(category), category, "Not an agricultural sensor category.")
     };
 }
-
+//----------------------------------------------------------------------------------------------------------------------//
 /// <summary>
 /// Which CLR value type the node publishes. This is what lets the gateway pick the
 /// correctly typed <see cref="TelemetryPacket{T}"/> bucket instead of dropping every
@@ -54,7 +54,7 @@ public enum PayloadKind
     Integer,
     Boolean
 }
-
+//----------------------------------------------------------------------------------------------------------------------//
 /// <summary>A sensor profile as submitted by the dashboard and stored by the gateway.</summary>
 // Reference [31]: Microsoft. ASP.NET Core Blazor forms validation. Microsoft Learn.
 //   https://learn.microsoft.com/aspnet/core/blazor/forms/validation
@@ -108,7 +108,7 @@ public sealed class SensorRegistration
 
     public DateTimeOffset RegisteredAt { get; set; } = DateTimeOffset.UtcNow;
 }
-
+//----------------------------------------------------------------------------------------------------------------------//
 /// <summary>Everything the dashboard needs to draw one tile in the sensor grid.</summary>
 public sealed record SensorSnapshot(
     string Id,

@@ -37,7 +37,7 @@ internal static class SelfCheckRunner
         Console.WriteLine("all checks passed");
         return 0;
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     // Reference [26]: OWASP. File Upload Cheat Sheet. OWASP Cheat Sheet Series.
     //   https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
     // Reference [27]: OWASP. Path Traversal.
@@ -119,7 +119,7 @@ internal static class SelfCheckRunner
 
         return log;
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     private static bool Throws(Action action)
     {
         try
@@ -132,7 +132,7 @@ internal static class SelfCheckRunner
             return true;
         }
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     private static void Assert(bool condition, string because)
     {
         if (!condition) throw new SelfCheckFailure(because);

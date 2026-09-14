@@ -24,14 +24,14 @@ public sealed class DeploymentNode
     public static DeploymentNode Create(string name, NodeKind kind, params DeploymentNode[] children)
         => new() { Name = name, Kind = kind, Children = [.. children] };
 }
-
+//----------------------------------------------------------------------------------------------------------------------//
 public enum IssueSeverity
 {
     Info,
     Warning,
     Error
 }
-
+//----------------------------------------------------------------------------------------------------------------------//
 /// <summary>A single validation finding, addressed by its breadcrumb path.</summary>
 public sealed record TopologyIssue(string Path, string Message, IssueSeverity Severity);
 

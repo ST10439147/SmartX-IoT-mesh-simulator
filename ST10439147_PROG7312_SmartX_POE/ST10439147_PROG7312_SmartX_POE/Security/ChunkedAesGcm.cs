@@ -37,6 +37,7 @@ public static class ChunkedAesGcm
     private const int FrameHeaderSize = 1 + 4 + TagSize;
 
     private static ReadOnlySpan<byte> Magic => "SXA1"u8;
+    //----------------------------------------------------------------------------------------------------------------------//
 
     /// <summary>Encrypts <paramref name="source"/> into <paramref name="destination"/>. Returns plaintext bytes consumed.</summary>
     // Reference [28]: Microsoft. AesGcm Class. Microsoft Learn.
@@ -99,7 +100,7 @@ public static class ChunkedAesGcm
         await destination.FlushAsync(ct);
         return total;
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     /// <summary>
     /// Decrypts and verifies. Throws <see cref="CryptographicException"/> if any frame
     /// has been altered, reordered, or if the stream was truncated before its final frame.
@@ -170,7 +171,7 @@ public static class ChunkedAesGcm
         await destination.FlushAsync(ct);
         return total;
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     private static void ValidateKey(byte[] key)
     {
         if (key is not { Length: KeySize })

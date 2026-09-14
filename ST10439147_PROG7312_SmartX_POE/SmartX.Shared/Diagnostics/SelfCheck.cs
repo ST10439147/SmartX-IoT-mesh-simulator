@@ -32,7 +32,7 @@ public static class SelfCheck
 
         return log;
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     // Reference [12]: Wikipedia. Circular buffer.
     //   https://en.wikipedia.org/wiki/Circular_buffer
     private static void CircularBufferWrapsAndKeepsOrder(List<string> log)
@@ -56,7 +56,7 @@ public static class SelfCheck
 
         log.Add("ring buffer: wraps, preserves order, indexes oldest-first");
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     // Reference [3]: Microsoft. Generic math (System.Numerics.INumber<T>). Microsoft Learn.
     //   https://learn.microsoft.com/dotnet/standard/generics/math
     // Reference [8]: Microsoft. Operator overloading - predefined unary, arithmetic and comparison operators. C# language reference, Microsoft Learn.
@@ -100,7 +100,7 @@ public static class SelfCheck
 
         log.Add("operators: +, -, unary -, ==, !=, <, >, <=, >= over float and int");
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     // Reference [1]: Microsoft. Generics in C#. Microsoft Learn.
     //   https://learn.microsoft.com/dotnet/csharp/fundamentals/types/generics
     private static void GenericPacketCarriesAllThreePayloadTypesWithoutBoxing(List<string> log)
@@ -130,7 +130,7 @@ public static class SelfCheck
 
         log.Add($"generics: float/int/bool through one wrapper, {allocated} bytes allocated over 50 000 ingests");
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     // Reference [13]: Microsoft. Jagged arrays (C# programming guide). Microsoft Learn.
     //   https://learn.microsoft.com/dotnet/csharp/programming-guide/arrays/jagged-arrays
     // Reference [14]: Microsoft. Multidimensional arrays (C# programming guide). Microsoft Learn.
@@ -169,14 +169,14 @@ public static class SelfCheck
 
         log.Add("arrays: ragged float[][] staging, float[,] projection, flush into List<T>");
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     private static DeploymentNode GoodTree() =>
         DeploymentNode.Create("Facility A", NodeKind.Facility,
             DeploymentNode.Create("Zone 1", NodeKind.Zone,
                 DeploymentNode.Create("Sub-Zone B", NodeKind.SubZone,
                     new DeploymentNode { Name = "node-3", Kind = NodeKind.Node, SensorId = "A4:CF:12:9B:04:7E" },
                     new DeploymentNode { Name = "node-4", Kind = NodeKind.Node, SensorId = "A4:CF:12:9B:04:7F" })));
-
+    //----------------------------------------------------------------------------------------------------------------------//
     private static void RecursiveValidationAcceptsAGoodTree(List<string> log)
     {
         var report = TopologyValidator.Validate(GoodTree());
@@ -192,7 +192,7 @@ public static class SelfCheck
 
         log.Add("recursion: valid four-tier tree accepted, breadcrumb path resolves");
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     private static void RecursiveValidationRejectsBadNesting(List<string> log)
     {
         // A Node hung straight off the Facility, skipping Zone and Sub-Zone.
@@ -215,7 +215,7 @@ public static class SelfCheck
 
         log.Add("recursion: tier-skipping and duplicate sensor mounts rejected with paths");
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     // Reference [16]: Microsoft. StackOverflowException Class (cannot be caught by a try/catch). Microsoft Learn.
     //   https://learn.microsoft.com/dotnet/api/system.stackoverflowexception
     private static void RecursiveValidationSurvivesPathologicalDepth(List<string> log)
@@ -240,7 +240,7 @@ public static class SelfCheck
 
         log.Add($"recursion: 50 000-tier payload stopped at depth {report.MaxDepthReached}, no stack overflow");
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     private static void RecursiveValidationDetectsCycles(List<string> log)
     {
         var root = DeploymentNode.Create("Facility A", NodeKind.Facility);
@@ -253,7 +253,7 @@ public static class SelfCheck
 
         log.Add("recursion: cycle in the deployment graph detected and reported");
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     // Reference [2]: Microsoft. How to serialize and deserialize JSON using System.Text.Json. Microsoft Learn.
     //   https://learn.microsoft.com/dotnet/standard/serialization/system-text-json/how-to
     private static void PacketSurvivesJsonRoundTrip(List<string> log)
@@ -270,7 +270,7 @@ public static class SelfCheck
 
         log.Add("serialisation: TelemetryPacket<float> and <bool> round-trip through JSON");
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     private static void EverySensorIsASpecificAgriculturalDevice(List<string> log)
     {
         // Spec() throws for a category with no row, so an enum member added without its
@@ -297,7 +297,7 @@ public static class SelfCheck
 
         log.Add($"categories: {categories.Length} agricultural sensor types, payload and unit fixed per type, unknown types rejected");
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     private static void Assert(bool condition, string because)
     {
         if (!condition) throw new SelfCheckFailure(because);

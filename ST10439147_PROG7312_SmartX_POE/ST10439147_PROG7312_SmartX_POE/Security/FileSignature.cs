@@ -26,11 +26,12 @@ public static class FileSignature
         [".gif"] = "GIF8"u8.ToArray(),
         [".pdf"] = "%PDF"u8.ToArray()
     };
-
+    //----------------------------------------------------------------------------------------------------------------------//
     private static readonly HashSet<string> TextExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".log", ".txt", ".json", ".cfg", ".conf", ".ini", ".csv", ".yaml", ".yml", ".env", ".md"
     };
+    //----------------------------------------------------------------------------------------------------------------------//
 
     // Reference [15]: Microsoft. Span<T> Struct. Microsoft Learn.
     //   https://learn.microsoft.com/dotnet/api/system.span-1
@@ -75,7 +76,7 @@ public static class FileSignature
         return new Verdict(false, "blocked",
             $"'{extension}' is not an accepted attachment type. Allowed: {string.Join(", ", BinaryMagic.Keys.Concat(TextExtensions).Order())}.");
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     /// <summary>
     /// Strips any path the client tried to smuggle in the filename, so an upload named
     /// <c>../../appsettings.json</c> cannot escape the attachment directory.

@@ -29,7 +29,7 @@ public sealed class AttachmentService
     private readonly ILogger<AttachmentService> _logger;
     private readonly string _root;
     private readonly byte[] _key;
-
+//----------------------------------------------------------------------------------------------------------------------//
     public AttachmentService(TelemetryStore store, IConfiguration config, ILogger<AttachmentService> logger)
     {
         _store = store;
@@ -42,7 +42,7 @@ public sealed class AttachmentService
     }
 
     public sealed record UploadResult(bool Ok, AttachmentInfo? Attachment, string? Error);
-
+//----------------------------------------------------------------------------------------------------------------------//
     // Reference [24]: Microsoft. Upload files in ASP.NET Core - uploading large files with streaming. Microsoft Learn.
     //   https://learn.microsoft.com/aspnet/core/mvc/models/file-uploads
     public async Task<UploadResult> StoreAsync(HttpRequest request, string sensorId, CancellationToken ct)
@@ -77,7 +77,7 @@ public sealed class AttachmentService
 
         return new UploadResult(false, null, "The request contained no file part.");
     }
-
+//----------------------------------------------------------------------------------------------------------------------//
     // Reference [26]: OWASP. File Upload Cheat Sheet. OWASP Cheat Sheet Series.
     //   https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
     // Reference [27]: OWASP. Path Traversal.
@@ -141,7 +141,7 @@ public sealed class AttachmentService
             return new UploadResult(false, null, "The gateway could not store the attachment.");
         }
     }
-
+//----------------------------------------------------------------------------------------------------------------------//
     /// <summary>Decrypts an attachment straight into the response body - never onto disk in the clear.</summary>
     public async Task<bool> WriteDecryptedAsync(AttachmentInfo info, Stream destination, CancellationToken ct)
     {
@@ -154,7 +154,7 @@ public sealed class AttachmentService
     }
 
     public bool Delete(AttachmentInfo info) => TryDelete(Path.Combine(_root, $"{info.Id}.sxa"));
-
+//----------------------------------------------------------------------------------------------------------------------//
     private static bool TryDelete(string path)
     {
         try
@@ -168,7 +168,7 @@ public sealed class AttachmentService
             return false;
         }
     }
-
+//----------------------------------------------------------------------------------------------------------------------//
     /// <summary>
     /// Key comes from configuration, which in production means an environment variable or
     /// a secret store - never appsettings.json in the repo. For a local run the gateway

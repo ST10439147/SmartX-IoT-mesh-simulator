@@ -27,21 +27,21 @@ public sealed class TelemetryBatchArchive
     private readonly Lock _gate = new();
     private int _head;
     private int _count;
-
+    //----------------------------------------------------------------------------------------------------------------------//
     public TelemetryBatchArchive(int cycleCapacity = 64)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(cycleCapacity, 1);
         _cycles = new float[cycleCapacity][];
         _cycleStamps = new DateTimeOffset[cycleCapacity];
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     public int CycleCapacity => _cycles.Length;
 
     public int CycleCount
     {
         get { lock (_gate) return _count; }
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     /// <summary>Widest row currently retained - the column count of the dense projection.</summary>
     public int WidestCycle
     {
@@ -59,6 +59,7 @@ public sealed class TelemetryBatchArchive
             }
         }
     }
+    //----------------------------------------------------------------------------------------------------------------------//
 
     /// <summary>Stages one raw poll cycle. The array is copied; callers may reuse their buffer.</summary>
     // Reference [13]: Microsoft. Jagged arrays (C# programming guide). Microsoft Learn.
@@ -75,7 +76,7 @@ public sealed class TelemetryBatchArchive
             if (_count < _cycles.Length) _count++;
         }
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     /// <summary>
     /// The hand-off the brief asks for: ragged raw arrays are flattened into a generic
     /// <c>List&lt;TelemetryPacket&lt;float&gt;&gt;</c>, at which point the pipeline stops
@@ -111,7 +112,7 @@ public sealed class TelemetryBatchArchive
             return packets;
         }
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     /// <summary>
     /// Dense rectangular projection for the heat map. Short rows are padded with
     /// <see cref="float.NaN"/> so "no sample" stays distinguishable from "sampled zero".
@@ -141,7 +142,7 @@ public sealed class TelemetryBatchArchive
             return dense;
         }
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     /// <summary>Jagged view for callers that want the ragged shape preserved, oldest cycle first.</summary>
     // Reference [13]: Microsoft. Jagged arrays (C# programming guide). Microsoft Learn.
     //   https://learn.microsoft.com/dotnet/csharp/programming-guide/arrays/jagged-arrays
@@ -154,7 +155,7 @@ public sealed class TelemetryBatchArchive
             return rows;
         }
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     // Caller-relative index (0 = oldest) to physical slot in the ring.
     private int RowIndex(int logical)
     {

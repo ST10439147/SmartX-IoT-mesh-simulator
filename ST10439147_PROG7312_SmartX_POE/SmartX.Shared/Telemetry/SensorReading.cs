@@ -32,13 +32,14 @@ public readonly struct SensorReading<T> : IEquatable<SensorReading<T>>, ICompara
         Value = value;
         TimestampUtc = timestampUtc;
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     public SensorReading(string sensorId, T value) : this(sensorId, value, DateTimeOffset.UtcNow)
     {
     }
 
     /// <summary>Zero-valued reading for the same node. <c>T.Zero</c> comes from generic math.</summary>
     public SensorReading<T> Zeroed() => new(SensorId, T.Zero, TimestampUtc);
+    //----------------------------------------------------------------------------------------------------------------------//
 
     // ---- aggregation -------------------------------------------------------
     // Meter3 = Meter1 + Meter2. The composite keeps both source ids so an
@@ -80,6 +81,7 @@ public readonly struct SensorReading<T> : IEquatable<SensorReading<T>>, ICompara
     public static bool operator ==(SensorReading<T> left, SensorReading<T> right) => left.Equals(right);
 
     public static bool operator !=(SensorReading<T> left, SensorReading<T> right) => !left.Equals(right);
+    //----------------------------------------------------------------------------------------------------------------------//
 
     // ---- relational --------------------------------------------------------
     // C# requires these in pairs: > with <, and >= with <=.
@@ -96,6 +98,7 @@ public readonly struct SensorReading<T> : IEquatable<SensorReading<T>>, ICompara
     public static bool operator >=(SensorReading<T> left, SensorReading<T> right) => left.Value >= right.Value;
 
     public static bool operator <=(SensorReading<T> left, SensorReading<T> right) => left.Value <= right.Value;
+    //----------------------------------------------------------------------------------------------------------------------//
 
     // Threshold checks against a bare value, so rule code reads `reading > limit`
     // rather than wrapping the limit in a throwaway SensorReading first.
@@ -107,6 +110,7 @@ public readonly struct SensorReading<T> : IEquatable<SensorReading<T>>, ICompara
     public static bool operator >=(SensorReading<T> left, T right) => left.Value >= right;
 
     public static bool operator <=(SensorReading<T> left, T right) => left.Value <= right;
+    //----------------------------------------------------------------------------------------------------------------------//
 
     // ---- conversion --------------------------------------------------------
     // Explicit, not implicit: an accidental widening to T would silently discard
@@ -117,7 +121,7 @@ public readonly struct SensorReading<T> : IEquatable<SensorReading<T>>, ICompara
 
     public override string ToString() => $"{SensorId} = {Value} @ {TimestampUtc:HH:mm:ss}";
 }
-
+//----------------------------------------------------------------------------------------------------------------------//
 /// <summary>Aggregation helpers that lean on the operators above.</summary>
 public static class SensorReadingExtensions
 {

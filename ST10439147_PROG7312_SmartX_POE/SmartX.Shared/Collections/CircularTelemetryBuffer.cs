@@ -44,7 +44,7 @@ public sealed class CircularTelemetryBuffer<T> : IEnumerable<TelemetryPacket<T>>
     public long TotalWritten { get; private set; }
 
     public bool IsEmpty => Count == 0;
-
+    //----------------------------------------------------------------------------------------------------------------------//
     /// <summary>
     /// Overwrites the oldest packet once full. Taken by <c>in</c> so the struct is
     /// passed by reference rather than copied on the way in.
@@ -66,7 +66,7 @@ public sealed class CircularTelemetryBuffer<T> : IEnumerable<TelemetryPacket<T>>
             TotalWritten++;
         }
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     /// <summary>Index 0 is the oldest retained packet, <c>Count - 1</c> the newest.</summary>
     public TelemetryPacket<T> this[int index]
     {
@@ -83,7 +83,7 @@ public sealed class CircularTelemetryBuffer<T> : IEnumerable<TelemetryPacket<T>>
             }
         }
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     public bool TryGetNewest(out TelemetryPacket<T> packet)
     {
         lock (_gate)
@@ -98,7 +98,7 @@ public sealed class CircularTelemetryBuffer<T> : IEnumerable<TelemetryPacket<T>>
             return true;
         }
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     /// <summary>
     /// Snapshot into a generic <c>List&lt;T&gt;</c> - the hand-off point where the raw
     /// ingestion window becomes an ordinary collection for querying and serialisation.
@@ -114,7 +114,7 @@ public sealed class CircularTelemetryBuffer<T> : IEnumerable<TelemetryPacket<T>>
             return copy;
         }
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     /// <summary>Most recent <paramref name="count"/> packets, oldest first.</summary>
     public List<TelemetryPacket<T>> TakeLast(int count)
     {
@@ -122,7 +122,7 @@ public sealed class CircularTelemetryBuffer<T> : IEnumerable<TelemetryPacket<T>>
         if (count >= all.Count) return all;
         return all.GetRange(all.Count - count, count);
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     public void Clear()
     {
         lock (_gate)
@@ -132,7 +132,7 @@ public sealed class CircularTelemetryBuffer<T> : IEnumerable<TelemetryPacket<T>>
             _count = 0;
         }
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     // Enumerates a snapshot, so a packet arriving mid-loop cannot invalidate the walk.
     public IEnumerator<TelemetryPacket<T>> GetEnumerator() => ToList().GetEnumerator();
 

@@ -35,10 +35,10 @@ public static class SnapshotFactory
             IsSilent: silent,
             Spark: window);
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     public static IReadOnlyList<SensorSnapshot> Snapshots(this TelemetryStore store)
         => store.Sensors.OrderBy(s => s.DeploymentPath).Select(store.Snapshot).ToList();
-
+    //----------------------------------------------------------------------------------------------------------------------//
     public static GatewayStatus Status(this TelemetryStore store, AnomalyEngine anomalies)
     {
         var uptime = (DateTimeOffset.UtcNow - store.StartedAt).TotalSeconds;

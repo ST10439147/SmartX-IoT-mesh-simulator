@@ -27,6 +27,7 @@ public sealed class InspectedUploadStream(ReadOnlyMemory<byte> head, Stream inne
 
     /// <summary>Lowercase hex SHA-256 of the plaintext. Valid once the stream is fully read.</summary>
     public string Sha256 => Convert.ToHexString(_digest ??= _hash.GetHashAndReset()).ToLowerInvariant();
+    //----------------------------------------------------------------------------------------------------------------------//
 
     // Reference [26]: OWASP. File Upload Cheat Sheet. OWASP Cheat Sheet Series.
     //   https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
@@ -55,7 +56,7 @@ public sealed class InspectedUploadStream(ReadOnlyMemory<byte> head, Stream inne
         _hash.AppendData(buffer.Span[..read]);
         return read;
     }
-
+    //----------------------------------------------------------------------------------------------------------------------//
     public override int Read(byte[] buffer, int offset, int count)
         => ReadAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
 
@@ -68,7 +69,7 @@ public sealed class InspectedUploadStream(ReadOnlyMemory<byte> head, Stream inne
     public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
     public override void SetLength(long value) => throw new NotSupportedException();
     public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
-
+    //----------------------------------------------------------------------------------------------------------------------//
     protected override void Dispose(bool disposing)
     {
         if (disposing) _hash.Dispose();
