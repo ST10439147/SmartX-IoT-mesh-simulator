@@ -16,9 +16,27 @@ $ErrorActionPreference = "Stop"
 Set-Location -Path $PSScriptRoot
 
 Write-Host "Checking Docker is running..." -ForegroundColor Cyan
+# Relax "Stop" while probing: Windows PowerShell turns docker's redirected stderr
+# into errors, which would kill the script before the friendly message below.
+$ErrorActionPreference = "Continue"
 docker info *> $null
+
+# Not running (e.g. straight after a reboot)? Launch Docker Desktop and poll until
+# the engine answers -- a cold start can take a couple of minutes.
+$dockerDesktop = "$env:ProgramFiles\Docker\Docker\Docker Desktop.exe"
+if ($LASTEXITCODE -ne 0 -and (Test-Path $dockerDesktop)) {
+    Write-Host "Docker isn't running -- starting Docker Desktop (this can take a couple of minutes)..." -ForegroundColor Cyan
+    Start-Process $dockerDesktop
+    $deadline = (Get-Date).AddMinutes(3)
+    while ($LASTEXITCODE -ne 0 -and (Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds 2
+        docker info *> $null
+    }
+}
+$ErrorActionPreference = "Stop"
+
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "Docker doesn't seem to be running. Start Docker Desktop and try again." -ForegroundColor Red
+    Write-Host "Docker still isn't running. Open Docker Desktop, wait until it says 'Engine running', then try again." -ForegroundColor Red
     exit 1
 }
 
