@@ -121,7 +121,7 @@ api.MapDelete("/sensors/{id}", async (string id, TelemetryStore store, IHubConte
 // The sensor's registered payload kind decides how the value is read, so a float node
 // cannot be fed a bool. A valid reading is only queued here - the IngestWorker lands it
 // in the store and raises any alert, so the node gets its 202 without waiting for either.
-api.MapPost("/telemetry", (TelemetryReading reading, TelemetryStore store, IngestQueue queue) =>
+api.MapPost("/telemetry", (TelemetryReading reading, TelemetryStore store, AnomalyEngine anomalies, IngestQueue queue) =>
 {
     if (reading.SensorId is null || !store.TryGet(reading.SensorId, out var sensor))
         return Results.NotFound(new { message = $"No sensor registered with id '{reading.SensorId}'." });
@@ -144,7 +144,8 @@ api.MapPost("/telemetry", (TelemetryReading reading, TelemetryStore store, Inges
             return Results.BadRequest(new { message = $"Sensor '{sensor.Id}' expects a {sensor.Payload} value." });
     }
 
-    return queue.TryEnqueue(sensor.Id, queued)
+    // A reading that would breach a threshold or is a spike goes in the priority lane.
+    return queue.TryEnqueue(sensor.Id, queued, anomalies.Classify(sensor, queued))
         ? Results.Accepted()
         : Results.Problem("Ingest queue is full.", statusCode: StatusCodes.Status503ServiceUnavailable);
 });

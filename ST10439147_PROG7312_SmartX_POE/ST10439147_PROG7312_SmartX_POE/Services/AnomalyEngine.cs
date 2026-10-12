@@ -79,14 +79,7 @@ public sealed class AnomalyEngine(TelemetryStore store, ILogger<AnomalyEngine> l
         }
 
         var history = window.Take(window.Count - 1).ToArray();
-
-        var mean = history.Average();
-        var variance = history.Sum(v => (v - mean) * (v - mean)) / history.Length;
-        var sigma = Math.Sqrt(variance);
-
-        // A perfectly flat signal has sigma 0, which would make every z-score infinite.
-        // Treat a flat line as "no evidence of a spike" and let the threshold rule speak.
-        var z = sigma > 1e-6 ? Math.Abs(observed - mean) / sigma : 0;
+        var (mean, z) = ZScore(history, observed);
 
         if (z >= SpikeZScore)
         {
@@ -111,6 +104,34 @@ public sealed class AnomalyEngine(TelemetryStore store, ILogger<AnomalyEngine> l
         }
 
         return null;
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    /// <summary>
+    /// Triage at the door, before the packet is ingested: would this reading be a spike
+    /// or a threshold breach? The ingest queue uses the answer to let it jump the line.
+    /// Same two rules as <see cref="Evaluate"/>, run against the history already stored.
+    /// </summary>
+    public AlertKind? Classify(SensorRegistration sensor, double value)
+    {
+        // An actuator flipping is normal operation (see Evaluate), never critical.
+        if (sensor.Payload == PayloadKind.Boolean) return null;
+
+        var history = store.Window(sensor.Id, 120);
+        if (history.Count >= MinSamplesForBaseline && ZScore(history, value).Z >= SpikeZScore)
+            return AlertKind.Spike;
+
+        return value > sensor.WarningThreshold ? AlertKind.ThresholdBreach : null;
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    private static (double Mean, double Z) ZScore(IReadOnlyCollection<double> history, double observed)
+    {
+        var mean = history.Average();
+        var variance = history.Sum(v => (v - mean) * (v - mean)) / history.Count;
+        var sigma = Math.Sqrt(variance);
+
+        // A perfectly flat signal has sigma 0, which would make every z-score infinite.
+        // Treat a flat line as "no evidence of a spike" and let the threshold rule speak.
+        return (mean, sigma > 1e-6 ? Math.Abs(observed - mean) / sigma : 0);
     }
     //----------------------------------------------------------------------------------------------------------------------//
     /// <summary>

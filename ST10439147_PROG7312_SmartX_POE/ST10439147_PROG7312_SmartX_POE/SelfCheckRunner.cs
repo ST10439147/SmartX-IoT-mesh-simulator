@@ -3,6 +3,7 @@ using System.Text;
 using SmartX.Api.Security;
 using SmartX.Api.Services;
 using SmartX.Shared.Diagnostics;
+using SmartX.Shared.Telemetry;
 
 namespace SmartX.Api;
 
@@ -136,10 +137,24 @@ internal static class SelfCheckRunner
         while (queue.Depth > 0) order.Add(queue.DequeueAsync().AsTask().GetAwaiter().GetResult().Value);
         Assert(order.SequenceEqual([1, 2, 3, 4, 5]), $"expected FIFO 1..5 but got {string.Join(",", order)}");
 
+        // Backed-up normal lane, then criticals arriving late: they must leave first,
+        // spikes ahead of threshold breaches, and equal ranks in arrival order.
+        for (var i = 1; i <= 3; i++) queue.TryEnqueue("meter-1", i);
+        queue.TryEnqueue("meter-1", 4, AlertKind.ThresholdBreach);
+        queue.TryEnqueue("meter-1", 5, AlertKind.Spike);
+        queue.TryEnqueue("meter-1", 6, AlertKind.ThresholdBreach);
+        queue.TryEnqueue("meter-1", 7);
+        Assert(queue.Depth == 4 && queue.CriticalDepth == 3, "criticals wait in their own lane");
+
+        order.Clear();
+        while (queue.Depth + queue.CriticalDepth > 0) order.Add(queue.DequeueAsync().AsTask().GetAwaiter().GetResult().Value);
+        Assert(order.SequenceEqual([5, 4, 6, 1, 2, 3, 7]), $"expected 5,4,6,1,2,3,7 but got {string.Join(",", order)}");
+
         for (var i = 0; i < IngestQueue.MaxDepth; i++) queue.TryEnqueue("meter-1", i);
         Assert(!queue.TryEnqueue("meter-1", 0), "a full queue must refuse the packet, not grow without bound");
+        Assert(queue.TryEnqueue("meter-1", 0, AlertKind.Spike), "a full normal lane must not turn a critical packet away");
 
-        log.Add("queue: packets leave in arrival order, a full queue sheds load");
+        log.Add("queue: FIFO for normal packets, criticals jump the line, a full lane sheds load");
         return log;
     }
     //----------------------------------------------------------------------------------------------------------------------//
