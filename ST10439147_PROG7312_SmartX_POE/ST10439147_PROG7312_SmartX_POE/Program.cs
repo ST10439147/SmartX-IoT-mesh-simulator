@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
@@ -113,6 +114,41 @@ api.MapDelete("/sensors/{id}", async (string id, TelemetryStore store, IHubConte
 });
 
 // ---------------------------------------------------------------- telemetry
+
+// The ingest door for the mesh: the simulator posts here exactly as a real node would.
+// The sensor's registered payload kind decides how the value is read, so a float node
+// cannot be fed a bool and the packet lands in its typed buffer without boxing.
+api.MapPost("/telemetry", async (
+    TelemetryReading reading,
+    TelemetryStore store,
+    AnomalyEngine anomalies,
+    IHubContext<TelemetryHub> hub) =>
+{
+    if (reading.SensorId is null || !store.TryGet(reading.SensorId, out var sensor))
+        return Results.NotFound(new { message = $"No sensor registered with id '{reading.SensorId}'." });
+
+    var value = reading.Value;
+
+    switch (sensor.Payload)
+    {
+        case PayloadKind.Float when value.ValueKind == JsonValueKind.Number && value.TryGetSingle(out var f) && float.IsFinite(f):
+            store.Ingest(new TelemetryPacket<float>(sensor.Id, f, sensor.Category));
+            break;
+        case PayloadKind.Integer when value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var i):
+            store.Ingest(new TelemetryPacket<int>(sensor.Id, i, sensor.Category));
+            break;
+        case PayloadKind.Boolean when value.ValueKind is JsonValueKind.True or JsonValueKind.False:
+            store.Ingest(new TelemetryPacket<bool>(sensor.Id, value.GetBoolean(), sensor.Category));
+            break;
+        default:
+            return Results.BadRequest(new { message = $"Sensor '{sensor.Id}' expects a {sensor.Payload} value." });
+    }
+
+    var alert = anomalies.Evaluate(sensor);
+    if (alert is not null) await hub.Clients.All.SendAsync(HubEvents.AlertRaised, alert);
+
+    return Results.Accepted();
+});
 
 // Returns the typed packets themselves, so TelemetryPacket<T> is what crosses the wire
 // rather than a flattened DTO. The client deserialises straight back into the same type.
@@ -302,4 +338,7 @@ static Dictionary<string, string[]> Validate(object model)
 
 // The request body is a simple JSON object with two properties, so a record is a good fit.
 internal sealed record RestoreRequest(string SensorId, AlertKind Kind);
+
+// Value stays a JsonElement until the sensor's payload kind says which type to read it as.
+internal sealed record TelemetryReading(string SensorId, JsonElement Value);
 //---------------------------DDDDDDDDDDDoooooooooooooo END OF FILE DDDDDDDDDDDoooooooooooooo---------------------------//

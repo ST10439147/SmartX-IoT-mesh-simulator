@@ -1,3 +1,5 @@
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.SignalR;
 using SmartX.Api.Hubs;
 using SmartX.Shared;
@@ -10,16 +12,19 @@ namespace SmartX.Api.Services;
 /// each node's own interval, injecting the two faults the dashboard exists to surface:
 /// value spikes and node disconnects.
 ///
-/// <para>Replace this with a real MQTT subscriber and nothing downstream changes - the
-/// simulator writes through the same <see cref="TelemetryStore.Ingest(in TelemetryPacket{float})"/>
-/// path the HTTP ingestion endpoint uses.</para>
+/// <para>Packets leave here the way a real node's would: as a <c>POST /api/telemetry</c>
+/// to the gateway. Unplug the simulator and nothing downstream changes.</para>
 /// </summary>
 public sealed class MeshSimulator(
     TelemetryStore store,
     AnomalyEngine anomalies,
     IHubContext<TelemetryHub> hub,
+    IServer server,
+    IHostApplicationLifetime lifetime,
     ILogger<MeshSimulator> logger) : BackgroundService
 {
+    private readonly HttpClient _http = new();
+
     private static readonly TimeSpan Tick = TimeSpan.FromSeconds(1);
 
     // Ticks of history synthesised at boot so the dashboard opens with full sparklines
@@ -41,11 +46,26 @@ public sealed class MeshSimulator(
     {
         SeedMesh();
 
+        // Hosted services start before Kestrel is listening, so there is nothing to post
+        // to yet. Wait for the server, then aim at whichever port it actually bound.
+        var started = new TaskCompletionSource();
+        using var registration = lifetime.ApplicationStarted.Register(started.SetResult);
+        await started.Task.WaitAsync(stoppingToken);
+
+        // Bound addresses can be wildcards ("http://[::]:8080" in the container), which
+        // are not dialable - keep the scheme and port, swap the host for loopback. Plain
+        // http is preferred so the loop does not depend on a trusted dev certificate.
+        var bound = server.Features.Get<IServerAddressesFeature>()!.Addresses
+            .Select(BindingAddress.Parse)
+            .OrderBy(a => a.Scheme == Uri.UriSchemeHttps)
+            .First();
+        _http.BaseAddress = new Uri($"{bound.Scheme}://localhost:{bound.Port}");
+
         // ponytail: warmup reuses the live publish path, so backfilled packets are all
         // stamped at boot time. Sparklines plot by index so that is invisible there;
         // /history shows a compressed leading segment. Thread backdated timestamps
         // through PublishCycle if that ever matters.
-        for (var warm = 1; warm <= WarmupTicks; warm++) PublishCycle(warm);
+        for (var warm = 1; warm <= WarmupTicks; warm++) await PublishCycle(warm, stoppingToken);
 
         // Drop faults the accelerated warmup happened to inject so the dashboard opens
         // on a healthy mesh; real spikes and disconnects accumulate from here.
@@ -63,7 +83,7 @@ public sealed class MeshSimulator(
 
             try
             {
-                PublishCycle(elapsed);
+                await PublishCycle(elapsed, stoppingToken);
 
                 if (elapsed % 5 == 0)
                 {
@@ -103,7 +123,7 @@ public sealed class MeshSimulator(
         }
     }
     //----------------------------------------------------------------------------------------------------------------------//
-    private void PublishCycle(int elapsed)
+    private async Task PublishCycle(int elapsed, CancellationToken token)
     {
         foreach (var sensor in store.Sensors)
         {
@@ -138,7 +158,7 @@ public sealed class MeshSimulator(
                 case PayloadKind.Float:
                 {
                     var value = node.NextFloat(_random, spiking);
-                    store.Ingest(new TelemetryPacket<float>(sensor.Id, value, sensor.Category));
+                    await Post(sensor.Id, value, token);
 
                     // A poll cycle returns however many samples the mesh delivered - the
                     // ragged rows the jagged archive exists for.
@@ -151,7 +171,7 @@ public sealed class MeshSimulator(
                 case PayloadKind.Integer:
                 {
                     var value = (int)Math.Round(node.NextFloat(_random, spiking));
-                    store.Ingest(new TelemetryPacket<int>(sensor.Id, value, sensor.Category));
+                    await Post(sensor.Id, value, token);
                     break;
                 }
 
@@ -159,15 +179,21 @@ public sealed class MeshSimulator(
                 {
                     // Actuators mostly hold state; a flip is the event worth seeing.
                     if (_random.NextDouble() < 0.08) node.Flag = !node.Flag;
-                    store.Ingest(new TelemetryPacket<bool>(sensor.Id, node.Flag, sensor.Category));
+                    await Post(sensor.Id, node.Flag, token);
                     break;
                 }
             }
-
-            var alert = anomalies.Evaluate(sensor);
-            if (alert is not null)
-                _ = hub.Clients.All.SendAsync(HubEvents.AlertRaised, alert, CancellationToken.None);
         }
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    // The gateway evaluates anomalies as it ingests, so that no longer happens here.
+    private async Task Post<T>(string sensorId, T value, CancellationToken token)
+    {
+        using var response = await _http.PostAsJsonAsync("api/telemetry", new { sensorId, value }, token);
+
+        // A node deleted mid-cycle answers 404; that is not worth losing the rest of the tick over.
+        if (!response.IsSuccessStatusCode)
+            logger.LogWarning("Gateway rejected packet from {Sensor}: {Status}", sensorId, (int)response.StatusCode);
     }
     //----------------------------------------------------------------------------------------------------------------------//
     private void SeedMesh()
