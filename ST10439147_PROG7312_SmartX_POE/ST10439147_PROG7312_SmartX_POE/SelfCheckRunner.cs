@@ -150,6 +150,13 @@ internal static class SelfCheckRunner
         while (queue.Depth + queue.CriticalDepth > 0) order.Add(queue.DequeueAsync().AsTask().GetAwaiter().GetResult().Value);
         Assert(order.SequenceEqual([5, 4, 6, 1, 2, 3, 7]), $"expected 5,4,6,1,2,3,7 but got {string.Join(",", order)}");
 
+        // The processing trail keeps the order the worker reported, and stays bounded.
+        queue.Throttle = TimeSpan.FromMilliseconds(5);
+        for (var i = 1; i <= 260; i++) queue.MarkProcessed(new QueuedPacket(i, "meter-1", i, DateTimeOffset.UtcNow));
+        var recent = queue.Recent;
+        Assert(recent.Count == 200 && recent[0].Position == 61 && recent[^1].Position == 260, "trail should hold the newest 200, oldest first");
+        Assert(queue.Throttle == TimeSpan.Zero, "the flood throttle must clear itself once the queue is empty");
+
         for (var i = 0; i < IngestQueue.MaxDepth; i++) queue.TryEnqueue("meter-1", i);
         Assert(!queue.TryEnqueue("meter-1", 0), "a full queue must refuse the packet, not grow without bound");
         Assert(queue.TryEnqueue("meter-1", 0, AlertKind.Spike), "a full normal lane must not turn a critical packet away");

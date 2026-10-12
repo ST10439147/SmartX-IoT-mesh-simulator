@@ -150,6 +150,53 @@ api.MapPost("/telemetry", (TelemetryReading reading, TelemetryStore store, Anoma
         : Results.Problem("Ingest queue is full.", statusCode: StatusCodes.Status503ServiceUnavailable);
 });
 
+// ---------------------------------------------------------------- ingest queue
+
+// Queue depth per lane plus the trail of recently processed packets. `position` is the
+// order the worker handled a packet in, `sequence` the order it arrived in - a critical
+// packet shows up with a high sequence at a low position.
+api.MapGet("/queue", (IngestQueue queue) => Results.Ok(new
+{
+    depth = queue.Depth,
+    criticalDepth = queue.CriticalDepth,
+    processed = queue.Processed,
+    throttleMs = queue.Throttle.TotalMilliseconds,
+    recent = queue.Recent.Select(p => new
+    {
+        p.Position,
+        p.Packet.Sequence,
+        lane = p.Packet.Critical is null ? "normal" : "critical",
+        p.Packet.Critical,
+        p.Packet.SensorId,
+        p.Packet.Value,
+        p.Packet.ReceivedAt,
+        waitedMs = Math.Round((p.ProcessedAt - p.Packet.ReceivedAt).TotalMilliseconds)
+    })
+}));
+
+// Test trigger: backs the normal lane up with ordinary packets and slows the worker so
+// the backlog lasts long enough to watch. Each flood packet repeats its sensor's latest
+// reading, so it is guaranteed normal. POST an out-of-range value to /api/telemetry
+// while this drains and GET /api/queue to see it processed ahead of the backlog.
+api.MapPost("/queue/flood", (TelemetryStore store, IngestQueue queue, [FromQuery] int count = 200, [FromQuery] int delayMs = 20) =>
+{
+    var sensors = store.Sensors.Where(s => !double.IsNaN(store.LatestNumeric(s.Id))).ToList();
+    if (sensors.Count == 0) return Results.Conflict(new { message = "No sensor has published yet, nothing to flood with." });
+
+    // ponytail: the slowed worker delays live readings too, so a long flood can trip the
+    // silence detector (3 missed publish intervals). The clamps keep it short.
+    queue.Throttle = TimeSpan.FromMilliseconds(Math.Clamp(delayMs, 0, 250));
+
+    var enqueued = 0;
+    for (var i = 0; i < Math.Clamp(count, 1, 2_000); i++)
+    {
+        var sensor = sensors[i % sensors.Count];
+        if (queue.TryEnqueue(sensor.Id, store.LatestNumeric(sensor.Id))) enqueued++;
+    }
+
+    return Results.Accepted("/api/queue", new { enqueued, depth = queue.Depth, throttleMs = queue.Throttle.TotalMilliseconds });
+});
+
 // Returns the typed packets themselves, so TelemetryPacket<T> is what crosses the wire
 // rather than a flattened DTO. The client deserialises straight back into the same type.
 api.MapGet("/sensors/{id}/history", (string id, TelemetryStore store, [FromQuery] int samples = 120) =>

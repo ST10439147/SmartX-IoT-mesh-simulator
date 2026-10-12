@@ -28,6 +28,11 @@ public sealed class IngestWorker(
             {
                 var packet = await queue.DequeueAsync(stoppingToken);
 
+                // Only ever non-zero during a flood test - see POST /api/queue/flood.
+                if (queue.Throttle > TimeSpan.Zero) await Task.Delay(queue.Throttle, stoppingToken);
+
+                queue.MarkProcessed(in packet);
+
                 // The node can be deleted while its packets are still waiting in line.
                 if (!store.TryGet(packet.SensorId, out var sensor)) continue;
 

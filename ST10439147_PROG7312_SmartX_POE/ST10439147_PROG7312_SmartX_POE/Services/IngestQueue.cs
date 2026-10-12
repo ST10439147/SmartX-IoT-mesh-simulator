@@ -30,8 +30,17 @@ public readonly record struct QueuedPacket(
 //   https://learn.microsoft.com/dotnet/api/system.collections.generic.queue-1
 // Reference: Microsoft. PriorityQueue<TElement,TPriority> Class. Microsoft Learn.
 //   https://learn.microsoft.com/dotnet/api/system.collections.generic.priorityqueue-2
+/// <summary>
+/// A packet the worker has finished with. <see cref="Position"/> is the order it was
+/// processed in; the packet's own Sequence is the order it arrived in. When the two
+/// disagree, something jumped the line.
+/// </summary>
+public readonly record struct ProcessedPacket(long Position, QueuedPacket Packet, DateTimeOffset ProcessedAt);
+
 public sealed class IngestQueue
 {
+    private const int RecentKept = 200;
+
     /// <summary>Per lane. Past this the gateway sheds load (503) rather than queueing until it runs out of memory.</summary>
     public const int MaxDepth = 10_000;
 
@@ -45,7 +54,28 @@ public sealed class IngestQueue
     private readonly SemaphoreSlim _available = new(0);
     private readonly Lock _gate = new();
 
+    // The processing-order trail is itself a FIFO queue: newest in, oldest out.
+    private readonly Queue<ProcessedPacket> _recent = new();
+
     private long _sequence;
+    private long _processed;
+
+    /// <summary>
+    /// Test knob: an artificial per-packet delay the worker honours so a flood stays
+    /// backed up long enough to watch. Clears itself once both lanes are empty.
+    /// </summary>
+    public TimeSpan Throttle { get; set; }
+
+    public long Processed
+    {
+        get { lock (_gate) return _processed; }
+    }
+
+    /// <summary>The last few packets in the order the worker processed them, oldest first.</summary>
+    public IReadOnlyList<ProcessedPacket> Recent
+    {
+        get { lock (_gate) return _recent.ToList(); }
+    }
 
     public int Depth
     {
@@ -82,6 +112,18 @@ public sealed class IngestQueue
     {
         await _available.WaitAsync(token);
         lock (_gate) return _critical.Count > 0 ? _critical.Dequeue() : _normal.Dequeue();
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    /// <summary>The worker reports back here once a packet is done, building the processing-order trail.</summary>
+    public void MarkProcessed(in QueuedPacket packet)
+    {
+        lock (_gate)
+        {
+            _recent.Enqueue(new ProcessedPacket(++_processed, packet, DateTimeOffset.UtcNow));
+            if (_recent.Count > RecentKept) _recent.Dequeue();
+
+            if (_normal.Count + _critical.Count == 0) Throttle = TimeSpan.Zero;
+        }
     }
 }
 //---------------------------DDDDDDDDDDDoooooooooooooo END OF FILE DDDDDDDDDDDoooooooooooooo---------------------------//
