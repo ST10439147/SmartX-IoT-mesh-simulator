@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using SmartX.Api.Security;
+using SmartX.Api.Services;
 using SmartX.Shared.Diagnostics;
 
 namespace SmartX.Api;
@@ -24,6 +25,9 @@ internal static class SelfCheckRunner
                 Console.WriteLine($"  ok  {line}");
 
             foreach (var line in RunCryptoChecks())
+                Console.WriteLine($"  ok  {line}");
+
+            foreach (var line in RunQueueChecks())
                 Console.WriteLine($"  ok  {line}");
         }
         catch (Exception ex)
@@ -117,6 +121,25 @@ internal static class SelfCheckRunner
 
         log.Add("uploads: magic-byte sniffing, text validation and path-traversal stripping");
 
+        return log;
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    private static IEnumerable<string> RunQueueChecks()
+    {
+        var log = new List<string>();
+        var queue = new IngestQueue();
+
+        for (var i = 1; i <= 5; i++) queue.TryEnqueue("meter-1", i);
+        Assert(queue.Depth == 5, "five packets should be waiting");
+
+        var order = new List<double>();
+        while (queue.Depth > 0) order.Add(queue.DequeueAsync().AsTask().GetAwaiter().GetResult().Value);
+        Assert(order.SequenceEqual([1, 2, 3, 4, 5]), $"expected FIFO 1..5 but got {string.Join(",", order)}");
+
+        for (var i = 0; i < IngestQueue.MaxDepth; i++) queue.TryEnqueue("meter-1", i);
+        Assert(!queue.TryEnqueue("meter-1", 0), "a full queue must refuse the packet, not grow without bound");
+
+        log.Add("queue: packets leave in arrival order, a full queue sheds load");
         return log;
     }
     //----------------------------------------------------------------------------------------------------------------------//

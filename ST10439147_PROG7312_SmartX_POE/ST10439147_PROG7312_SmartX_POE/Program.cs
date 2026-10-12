@@ -33,8 +33,10 @@ builder.WebHost.ConfigureKestrel(options =>
 builder.Services.AddSingleton<TelemetryStore>();
 builder.Services.AddSingleton<AnomalyEngine>();
 builder.Services.AddSingleton<AttachmentService>();
+builder.Services.AddSingleton<IngestQueue>();
 // Reference [23]: Microsoft. Background tasks with hosted services in ASP.NET Core. Microsoft Learn.
 //   https://learn.microsoft.com/aspnet/core/fundamentals/host/hosted-services
+builder.Services.AddHostedService<IngestWorker>();
 builder.Services.AddHostedService<MeshSimulator>();
 // Reference [22]: Microsoft. Introduction to ASP.NET Core SignalR. Microsoft Learn.
 //   https://learn.microsoft.com/aspnet/core/signalr/introduction
@@ -117,37 +119,34 @@ api.MapDelete("/sensors/{id}", async (string id, TelemetryStore store, IHubConte
 
 // The ingest door for the mesh: the simulator posts here exactly as a real node would.
 // The sensor's registered payload kind decides how the value is read, so a float node
-// cannot be fed a bool and the packet lands in its typed buffer without boxing.
-api.MapPost("/telemetry", async (
-    TelemetryReading reading,
-    TelemetryStore store,
-    AnomalyEngine anomalies,
-    IHubContext<TelemetryHub> hub) =>
+// cannot be fed a bool. A valid reading is only queued here - the IngestWorker lands it
+// in the store and raises any alert, so the node gets its 202 without waiting for either.
+api.MapPost("/telemetry", (TelemetryReading reading, TelemetryStore store, IngestQueue queue) =>
 {
     if (reading.SensorId is null || !store.TryGet(reading.SensorId, out var sensor))
         return Results.NotFound(new { message = $"No sensor registered with id '{reading.SensorId}'." });
 
     var value = reading.Value;
+    double queued;
 
     switch (sensor.Payload)
     {
         case PayloadKind.Float when value.ValueKind == JsonValueKind.Number && value.TryGetSingle(out var f) && float.IsFinite(f):
-            store.Ingest(new TelemetryPacket<float>(sensor.Id, f, sensor.Category));
+            queued = f;
             break;
         case PayloadKind.Integer when value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var i):
-            store.Ingest(new TelemetryPacket<int>(sensor.Id, i, sensor.Category));
+            queued = i;
             break;
         case PayloadKind.Boolean when value.ValueKind is JsonValueKind.True or JsonValueKind.False:
-            store.Ingest(new TelemetryPacket<bool>(sensor.Id, value.GetBoolean(), sensor.Category));
+            queued = value.GetBoolean() ? 1 : 0;
             break;
         default:
             return Results.BadRequest(new { message = $"Sensor '{sensor.Id}' expects a {sensor.Payload} value." });
     }
 
-    var alert = anomalies.Evaluate(sensor);
-    if (alert is not null) await hub.Clients.All.SendAsync(HubEvents.AlertRaised, alert);
-
-    return Results.Accepted();
+    return queue.TryEnqueue(sensor.Id, queued)
+        ? Results.Accepted()
+        : Results.Problem("Ingest queue is full.", statusCode: StatusCodes.Status503ServiceUnavailable);
 });
 
 // Returns the typed packets themselves, so TelemetryPacket<T> is what crosses the wire
