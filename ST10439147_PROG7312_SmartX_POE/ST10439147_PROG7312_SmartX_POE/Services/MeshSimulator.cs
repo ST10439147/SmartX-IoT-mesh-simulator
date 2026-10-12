@@ -18,6 +18,7 @@ namespace SmartX.Api.Services;
 public sealed class MeshSimulator(
     TelemetryStore store,
     AnomalyEngine anomalies,
+    CommandService commands,
     IHubContext<TelemetryHub> hub,
     IServer server,
     IHostApplicationLifetime lifetime,
@@ -177,8 +178,11 @@ public sealed class MeshSimulator(
 
                 case PayloadKind.Boolean:
                 {
-                    // Actuators mostly hold state; a flip is the event worth seeing.
-                    if (_random.NextDouble() < 0.08) node.Flag = !node.Flag;
+                    // A manual override wins: the node holds the commanded position until
+                    // it is undone. Otherwise actuators mostly hold state; a flip is the
+                    // event worth seeing.
+                    if (commands.TryGetOverride(sensor.Id, out var forced)) node.Flag = forced;
+                    else if (_random.NextDouble() < 0.08) node.Flag = !node.Flag;
                     await Post(sensor.Id, node.Flag, token);
                     break;
                 }

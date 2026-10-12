@@ -30,6 +30,9 @@ internal static class SelfCheckRunner
 
             foreach (var line in RunQueueChecks())
                 Console.WriteLine($"  ok  {line}");
+
+            foreach (var line in RunCommandChecks())
+                Console.WriteLine($"  ok  {line}");
         }
         catch (Exception ex)
         {
@@ -162,6 +165,33 @@ internal static class SelfCheckRunner
         Assert(queue.TryEnqueue("meter-1", 0, AlertKind.Spike), "a full normal lane must not turn a critical packet away");
 
         log.Add("queue: FIFO for normal packets, criticals jump the line, a full lane sheds load");
+        return log;
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    private static IEnumerable<string> RunCommandChecks()
+    {
+        var log = new List<string>();
+        var commands = new CommandService();
+
+        Assert(!commands.TryUndo(out _), "undo on an empty stack must report nothing to undo, not throw");
+
+        commands.Issue("open valve A", ["valve-a"], true);
+        commands.Issue("shut all valves", ["valve-a", "valve-b"], false);
+
+        Assert(commands.History.Select(c => c.Label).SequenceEqual(["shut all valves", "open valve A"]),
+            "history must list the most recent command first");
+        Assert(commands.TryGetOverride("valve-a", out var a) && !a && commands.TryGetOverride("valve-b", out var b) && !b,
+            "the batch command should have shut both valves");
+
+        // Undo the batch: A goes back to the earlier override, B back to auto.
+        Assert(commands.TryUndo(out var undone) && undone!.Label == "shut all valves", "undo must pop the last command issued");
+        Assert(commands.TryGetOverride("valve-a", out a) && a, "valve A should be back to the override it had before");
+        Assert(!commands.TryGetOverride("valve-b", out _), "valve B had no override before, so it returns to auto");
+
+        Assert(commands.TryUndo(out _) && !commands.TryGetOverride("valve-a", out _), "second undo releases valve A");
+        Assert(!commands.TryUndo(out _) && commands.History.Count == 0, "the stack is empty again");
+
+        log.Add("stack: commands undo last-in-first-out, a batch reverts as one, empty undo is safe");
         return log;
     }
     //----------------------------------------------------------------------------------------------------------------------//
