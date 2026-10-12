@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
@@ -32,8 +33,10 @@ builder.WebHost.ConfigureKestrel(options =>
 builder.Services.AddSingleton<TelemetryStore>();
 builder.Services.AddSingleton<AnomalyEngine>();
 builder.Services.AddSingleton<AttachmentService>();
+builder.Services.AddSingleton<IngestQueue>();
 // Reference [23]: Microsoft. Background tasks with hosted services in ASP.NET Core. Microsoft Learn.
 //   https://learn.microsoft.com/aspnet/core/fundamentals/host/hosted-services
+builder.Services.AddHostedService<IngestWorker>();
 builder.Services.AddHostedService<MeshSimulator>();
 // Reference [22]: Microsoft. Introduction to ASP.NET Core SignalR. Microsoft Learn.
 //   https://learn.microsoft.com/aspnet/core/signalr/introduction
@@ -113,6 +116,86 @@ api.MapDelete("/sensors/{id}", async (string id, TelemetryStore store, IHubConte
 });
 
 // ---------------------------------------------------------------- telemetry
+
+// The ingest door for the mesh: the simulator posts here exactly as a real node would.
+// The sensor's registered payload kind decides how the value is read, so a float node
+// cannot be fed a bool. A valid reading is only queued here - the IngestWorker lands it
+// in the store and raises any alert, so the node gets its 202 without waiting for either.
+api.MapPost("/telemetry", (TelemetryReading reading, TelemetryStore store, AnomalyEngine anomalies, IngestQueue queue) =>
+{
+    if (reading.SensorId is null || !store.TryGet(reading.SensorId, out var sensor))
+        return Results.NotFound(new { message = $"No sensor registered with id '{reading.SensorId}'." });
+
+    var value = reading.Value;
+    double queued;
+
+    switch (sensor.Payload)
+    {
+        case PayloadKind.Float when value.ValueKind == JsonValueKind.Number && value.TryGetSingle(out var f) && float.IsFinite(f):
+            queued = f;
+            break;
+        case PayloadKind.Integer when value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var i):
+            queued = i;
+            break;
+        case PayloadKind.Boolean when value.ValueKind is JsonValueKind.True or JsonValueKind.False:
+            queued = value.GetBoolean() ? 1 : 0;
+            break;
+        default:
+            return Results.BadRequest(new { message = $"Sensor '{sensor.Id}' expects a {sensor.Payload} value." });
+    }
+
+    // A reading that would breach a threshold or is a spike goes in the priority lane.
+    return queue.TryEnqueue(sensor.Id, queued, anomalies.Classify(sensor, queued))
+        ? Results.Accepted()
+        : Results.Problem("Ingest queue is full.", statusCode: StatusCodes.Status503ServiceUnavailable);
+});
+
+// ---------------------------------------------------------------- ingest queue
+
+// Queue depth per lane plus the trail of recently processed packets. `position` is the
+// order the worker handled a packet in, `sequence` the order it arrived in - a critical
+// packet shows up with a high sequence at a low position.
+api.MapGet("/queue", (IngestQueue queue) => Results.Ok(new
+{
+    depth = queue.Depth,
+    criticalDepth = queue.CriticalDepth,
+    processed = queue.Processed,
+    throttleMs = queue.Throttle.TotalMilliseconds,
+    recent = queue.Recent.Select(p => new
+    {
+        p.Position,
+        p.Packet.Sequence,
+        lane = p.Packet.Critical is null ? "normal" : "critical",
+        p.Packet.Critical,
+        p.Packet.SensorId,
+        p.Packet.Value,
+        p.Packet.ReceivedAt,
+        waitedMs = Math.Round((p.ProcessedAt - p.Packet.ReceivedAt).TotalMilliseconds)
+    })
+}));
+
+// Test trigger: backs the normal lane up with ordinary packets and slows the worker so
+// the backlog lasts long enough to watch. Each flood packet repeats its sensor's latest
+// reading, so it is guaranteed normal. POST an out-of-range value to /api/telemetry
+// while this drains and GET /api/queue to see it processed ahead of the backlog.
+api.MapPost("/queue/flood", (TelemetryStore store, IngestQueue queue, [FromQuery] int count = 200, [FromQuery] int delayMs = 20) =>
+{
+    var sensors = store.Sensors.Where(s => !double.IsNaN(store.LatestNumeric(s.Id))).ToList();
+    if (sensors.Count == 0) return Results.Conflict(new { message = "No sensor has published yet, nothing to flood with." });
+
+    // ponytail: the slowed worker delays live readings too, so a long flood can trip the
+    // silence detector (3 missed publish intervals). The clamps keep it short.
+    queue.Throttle = TimeSpan.FromMilliseconds(Math.Clamp(delayMs, 0, 250));
+
+    var enqueued = 0;
+    for (var i = 0; i < Math.Clamp(count, 1, 2_000); i++)
+    {
+        var sensor = sensors[i % sensors.Count];
+        if (queue.TryEnqueue(sensor.Id, store.LatestNumeric(sensor.Id))) enqueued++;
+    }
+
+    return Results.Accepted("/api/queue", new { enqueued, depth = queue.Depth, throttleMs = queue.Throttle.TotalMilliseconds });
+});
 
 // Returns the typed packets themselves, so TelemetryPacket<T> is what crosses the wire
 // rather than a flattened DTO. The client deserialises straight back into the same type.
@@ -302,4 +385,7 @@ static Dictionary<string, string[]> Validate(object model)
 
 // The request body is a simple JSON object with two properties, so a record is a good fit.
 internal sealed record RestoreRequest(string SensorId, AlertKind Kind);
+
+// Value stays a JsonElement until the sensor's payload kind says which type to read it as.
+internal sealed record TelemetryReading(string SensorId, JsonElement Value);
 //---------------------------DDDDDDDDDDDoooooooooooooo END OF FILE DDDDDDDDDDDoooooooooooooo---------------------------//

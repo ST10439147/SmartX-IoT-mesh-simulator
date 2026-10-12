@@ -137,6 +137,28 @@ public sealed class GatewayClient(HttpClient http)
     public async Task<StressResult?> StressTopologyAsync(int depth, CancellationToken ct = default)
         => await http.GetFromJsonAsync<StressResult>($"api/topology/stress?depth={depth}", SmartXJson.Options, ct);
 
+    // ---- ingest queue ------------------------------------------------------
+
+    /// <summary>Queue depth and processing trail. Null if the gateway could not be reached - the panel just keeps its last view.</summary>
+    public async Task<QueueStatus?> GetQueueAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            return await http.GetFromJsonAsync<QueueStatus>("api/queue", SmartXJson.Options, ct);
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+    }
+
+    public async Task FloodQueueAsync(CancellationToken ct = default)
+        => await http.PostAsync("api/queue/flood", null, ct);
+
+    /// <summary>Posts one reading exactly as a node would. Used by the queue panel to send a deliberately out-of-range value.</summary>
+    public async Task<bool> PostTelemetryAsync(string sensorId, double value, CancellationToken ct = default)
+        => (await http.PostAsJsonAsync("api/telemetry", new { sensorId, value }, SmartXJson.Options, ct)).IsSuccessStatusCode;
+//----------------------------------------------------------------------------------------------------------------------//
     /// <summary>Mirrors <c>AttachmentService.MaxBytes</c> so the browser rejects an oversized file first.</summary>
     public const long MaxUploadBytes = 25 * 1024 * 1024;
 }
@@ -158,6 +180,19 @@ public sealed record AggregateResult(
     AggregateValue Delta,
     bool LeftDrawsMore,
     bool Equal);
+//----------------------------------------------------------------------------------------------------------------------//
+/// <summary>Shape of <c>GET /api/queue</c>. Position is processing order, Sequence is arrival order.</summary>
+public sealed record QueueStatus(int Depth, int CriticalDepth, long Processed, double ThrottleMs, List<QueueEntry> Recent);
+
+public sealed record QueueEntry(
+    long Position,
+    long Sequence,
+    string Lane,
+    AlertKind? Critical,
+    string SensorId,
+    double Value,
+    DateTimeOffset ReceivedAt,
+    double WaitedMs);
 //----------------------------------------------------------------------------------------------------------------------//
 public sealed record StressResult(
     int RequestedDepth,

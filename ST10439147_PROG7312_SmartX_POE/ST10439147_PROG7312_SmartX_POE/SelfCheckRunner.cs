@@ -1,7 +1,9 @@
 using System.Security.Cryptography;
 using System.Text;
 using SmartX.Api.Security;
+using SmartX.Api.Services;
 using SmartX.Shared.Diagnostics;
+using SmartX.Shared.Telemetry;
 
 namespace SmartX.Api;
 
@@ -24,6 +26,9 @@ internal static class SelfCheckRunner
                 Console.WriteLine($"  ok  {line}");
 
             foreach (var line in RunCryptoChecks())
+                Console.WriteLine($"  ok  {line}");
+
+            foreach (var line in RunQueueChecks())
                 Console.WriteLine($"  ok  {line}");
         }
         catch (Exception ex)
@@ -117,6 +122,46 @@ internal static class SelfCheckRunner
 
         log.Add("uploads: magic-byte sniffing, text validation and path-traversal stripping");
 
+        return log;
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    private static IEnumerable<string> RunQueueChecks()
+    {
+        var log = new List<string>();
+        var queue = new IngestQueue();
+
+        for (var i = 1; i <= 5; i++) queue.TryEnqueue("meter-1", i);
+        Assert(queue.Depth == 5, "five packets should be waiting");
+
+        var order = new List<double>();
+        while (queue.Depth > 0) order.Add(queue.DequeueAsync().AsTask().GetAwaiter().GetResult().Value);
+        Assert(order.SequenceEqual([1, 2, 3, 4, 5]), $"expected FIFO 1..5 but got {string.Join(",", order)}");
+
+        // Backed-up normal lane, then criticals arriving late: they must leave first,
+        // spikes ahead of threshold breaches, and equal ranks in arrival order.
+        for (var i = 1; i <= 3; i++) queue.TryEnqueue("meter-1", i);
+        queue.TryEnqueue("meter-1", 4, AlertKind.ThresholdBreach);
+        queue.TryEnqueue("meter-1", 5, AlertKind.Spike);
+        queue.TryEnqueue("meter-1", 6, AlertKind.ThresholdBreach);
+        queue.TryEnqueue("meter-1", 7);
+        Assert(queue.Depth == 4 && queue.CriticalDepth == 3, "criticals wait in their own lane");
+
+        order.Clear();
+        while (queue.Depth + queue.CriticalDepth > 0) order.Add(queue.DequeueAsync().AsTask().GetAwaiter().GetResult().Value);
+        Assert(order.SequenceEqual([5, 4, 6, 1, 2, 3, 7]), $"expected 5,4,6,1,2,3,7 but got {string.Join(",", order)}");
+
+        // The processing trail keeps the order the worker reported, and stays bounded.
+        queue.Throttle = TimeSpan.FromMilliseconds(5);
+        for (var i = 1; i <= 260; i++) queue.MarkProcessed(new QueuedPacket(i, "meter-1", i, DateTimeOffset.UtcNow));
+        var recent = queue.Recent;
+        Assert(recent.Count == 200 && recent[0].Position == 61 && recent[^1].Position == 260, "trail should hold the newest 200, oldest first");
+        Assert(queue.Throttle == TimeSpan.Zero, "the flood throttle must clear itself once the queue is empty");
+
+        for (var i = 0; i < IngestQueue.MaxDepth; i++) queue.TryEnqueue("meter-1", i);
+        Assert(!queue.TryEnqueue("meter-1", 0), "a full queue must refuse the packet, not grow without bound");
+        Assert(queue.TryEnqueue("meter-1", 0, AlertKind.Spike), "a full normal lane must not turn a critical packet away");
+
+        log.Add("queue: FIFO for normal packets, criticals jump the line, a full lane sheds load");
         return log;
     }
     //----------------------------------------------------------------------------------------------------------------------//
