@@ -229,6 +229,78 @@
     </section>
 }
 
+@* ------------------------------------------------------------ ingest queue *@
+<section class="panel inspector">
+    <div class="panel-head">
+        <h2>Ingest queue</h2>
+        <span class="count">FIFO Queue&lt;T&gt; &middot; criticals via PriorityQueue</span>
+    </div>
+
+    <p>
+        Every packet waits here before the background worker ingests it. Normal packets leave in
+        arrival order; a spike or threshold breach goes into a priority lane that the worker always
+        empties first. Flood the queue, then send a critical packet, to watch it overtake the backlog.
+    </p>
+
+    <div class="actions">
+        <button @onclick="FloodAsync">Flood the queue</button>
+        <button class="danger" @onclick="SendCriticalAsync" disabled="@(CriticalTarget is null)">Send critical packet</button>
+    </div>
+
+    @if (_queue is not null)
+    {
+        <div class="stats" style="margin-top:.8rem">
+            <div class="stat">
+                <div class="label">Waiting (normal)</div>
+                <div class="value @(_queue.Depth > 0 ? "warn" : "ok")">@_queue.Depth</div>
+            </div>
+            <div class="stat">
+                <div class="label">Waiting (critical)</div>
+                <div class="value @(_queue.CriticalDepth > 0 ? "crit" : "ok")">@_queue.CriticalDepth</div>
+            </div>
+            <div class="stat">
+                <div class="label">Processed</div>
+                <div class="value">@_queue.Processed.ToString("N0")</div>
+            </div>
+            <div class="stat">
+                <div class="label">Worker delay</div>
+                <div class="value">@_queue.ThrottleMs.ToString("0") ms</div>
+            </div>
+        </div>
+
+        @if (_lastCritical is { } jumped)
+        {
+            <p class="hint" style="margin-top:.6rem">
+                Last critical packet (@jumped.Critical on @SensorName(jumped.SensorId)) arrived
+                <code>#@jumped.Sequence</code> and was processed <code>#@jumped.Position</code>,
+                ahead of @_overtaken older normal packet(s).
+            </p>
+        }
+
+        <h3>Processing order, newest first</h3>
+        <div class="scroll-x" style="max-height:20rem;overflow-y:auto">
+            <table class="context-table">
+                <thead>
+                    <tr><th>processed</th><th>arrived</th><th>lane</th><th>sensor</th><th>value</th><th>waited</th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var entry in _queue.Recent.AsEnumerable().Reverse())
+                    {
+                        <tr class="@(entry.Critical is null ? "" : "offending")">
+                            <td>#@entry.Position</td>
+                            <td>#@entry.Sequence</td>
+                            <td>@(entry.Critical?.ToString() ?? "normal")</td>
+                            <td>@SensorName(entry.SensorId)</td>
+                            <td>@entry.Value.ToString("0.##")</td>
+                            <td>@entry.WaitedMs.ToString("0") ms</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</section>
+
 @* ------------------------------------------------------------ operator overloading *@
 <section class="panel inspector">
     <div class="panel-head">
@@ -317,6 +389,10 @@
     private string _aggregateB = string.Empty;
     private AggregateResult? _aggregate;
 
+    private QueueStatus? _queue;
+    private QueueEntry? _lastCritical;
+    private int _overtaken;   // packets that arrived before _lastCritical but were processed after it
+
     // Reference [22]: Microsoft. Introduction to ASP.NET Core SignalR. Microsoft Learn.
     //   https://learn.microsoft.com/aspnet/core/signalr/introduction
     protected override async Task OnInitializedAsync()
@@ -325,6 +401,7 @@
         _snapshots = await Gateway.GetSensorsAsync();
         RefreshMeters();
         SortAlerts(await Gateway.GetAlertsAsync());
+        await RefreshQueueAsync();
 
         _hub = new HubConnectionBuilder()
             .WithUrl(new Uri(Gateway.BaseAddress, "hubs/telemetry"))
@@ -341,6 +418,9 @@
             // Keep the inspector pinned to the same node as fresh data lands.
             if (_selectedSensor is not null)
                 _selectedSensor = snapshots.FirstOrDefault(s => s.Id == _selectedSensor.Id) ?? _selectedSensor;
+
+            // The queue has no push event of its own; the once-a-second tick is the cue to re-read it.
+            await RefreshQueueAsync();
 
             await InvokeAsync(StateHasChanged);
         });
@@ -453,6 +533,40 @@
 
     private async Task AggregateAsync()
         => _aggregate = await Gateway.AggregateAsync(_aggregateA, _aggregateB);
+
+    private async Task RefreshQueueAsync()
+    {
+        _queue = await Gateway.GetQueueAsync() ?? _queue;
+
+        // The trail is bounded, so a critical packet scrolls out of it once the backlog
+        // behind it has drained. Remember the last one, and the most it was seen to overtake.
+        if (_queue?.Recent.LastOrDefault(e => e.Critical is not null) is not { } critical) return;
+
+        var overtaken = _queue.Recent.Count(e => e.Position > critical.Position && e.Sequence < critical.Sequence);
+        _overtaken = critical.Sequence == _lastCritical?.Sequence ? Math.Max(_overtaken, overtaken) : overtaken;
+        _lastCritical = critical;
+    }
+
+    private async Task FloodAsync()
+    {
+        await Gateway.FloodQueueAsync();
+        await RefreshQueueAsync();
+    }
+
+    /// <summary>Any numeric node will do: the critical packet is about its value, not which sensor sent it.</summary>
+    private SensorSnapshot? CriticalTarget => _snapshots.FirstOrDefault(s => s.Payload != PayloadKind.Boolean);
+
+    private async Task SendCriticalAsync()
+    {
+        if (CriticalTarget is not { } sensor) return;
+
+        // Far outside anything the node normally reads, and a whole number so an
+        // integer sensor accepts it too.
+        await Gateway.PostTelemetryAsync(sensor.Id, Math.Round(Math.Abs(sensor.LatestValue) * 3 + 100));
+        await RefreshQueueAsync();
+    }
+
+    private string SensorName(string id) => _snapshots.FirstOrDefault(s => s.Id == id)?.DisplayName ?? id;
 
     private bool Flagged(SensorSnapshot sensor)
         => sensor.IsSilent || _active.Any(a => a.SensorId == sensor.Id && a.Severity >= AlertSeverity.Warning);
