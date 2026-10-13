@@ -38,7 +38,9 @@ builder.Services.AddSingleton<CommandService>();
 // Reference [23]: Microsoft. Background tasks with hosted services in ASP.NET Core. Microsoft Learn.
 //   https://learn.microsoft.com/aspnet/core/fundamentals/host/hosted-services
 builder.Services.AddHostedService<IngestWorker>();
-builder.Services.AddHostedService<MeshSimulator>();
+// Registered as a singleton too, so the unplug endpoint can reach the running simulator.
+builder.Services.AddSingleton<MeshSimulator>();
+builder.Services.AddHostedService(services => services.GetRequiredService<MeshSimulator>());
 // Reference [22]: Microsoft. Introduction to ASP.NET Core SignalR. Microsoft Learn.
 //   https://learn.microsoft.com/aspnet/core/signalr/introduction
 builder.Services.AddSignalR().AddJsonProtocol(options => SmartXJson.Configure(options.PayloadSerializerOptions));
@@ -381,6 +383,29 @@ api.MapPost("/alerts/restore", (RestoreRequest request, AnomalyEngine anomalies)
 {
     anomalies.Restore(request.SensorId, request.Kind);
     return Results.NoContent();
+});
+
+// The two hash sets behind "one fault, one alert": which nodes are known to be
+// disconnected, which error states are open (as sensorId|Kind), and how many repeat
+// alerts were skipped because the fault was already in a set.
+api.MapGet("/faults", (AnomalyEngine anomalies) => Results.Ok(new
+{
+    disconnected = anomalies.Disconnected,
+    activeErrors = anomalies.ActiveErrors,
+    duplicatesSkipped = anomalies.DuplicatesSkipped
+}));
+
+// Test trigger: the simulated node stops publishing for a while, as if unplugged. The
+// silence sweep finds it within a few seconds and keeps finding it; GET /api/alerts
+// should still show one Silence alert for it. seconds=0 plugs it back in.
+api.MapPost("/sensors/{id}/unplug", (string id, TelemetryStore store, MeshSimulator mesh, [FromQuery] int seconds = 60) =>
+{
+    if (!store.TryGet(id, out var sensor)) return Results.NotFound();
+
+    seconds = Math.Clamp(seconds, 0, 600);
+    mesh.Unplug(sensor.Id, TimeSpan.FromSeconds(seconds));
+
+    return Results.Accepted("/api/faults", new { sensor.Id, silentForSeconds = seconds });
 });
 
 // ---------------------------------------------------------------- topology (recursion)

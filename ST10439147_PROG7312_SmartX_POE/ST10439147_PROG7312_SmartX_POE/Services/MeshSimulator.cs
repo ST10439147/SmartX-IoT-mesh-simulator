@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.SignalR;
@@ -37,6 +38,16 @@ public sealed class MeshSimulator(
     private readonly Random _random = new(7312);
 
     private readonly Dictionary<string, NodeState> _state = new(StringComparer.OrdinalIgnoreCase);
+
+    // Nodes an operator has unplugged, and until when. Written from a request thread and
+    // read from the publish loop, hence concurrent.
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _unplugged = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Test trigger: the node stops publishing for <paramref name="duration"/>, as if its
+    /// power had been pulled. A zero duration plugs it straight back in.
+    /// </summary>
+    public void Unplug(string sensorId, TimeSpan duration) => _unplugged[sensorId] = DateTimeOffset.UtcNow + duration;
     //----------------------------------------------------------------------------------------------------------------------//
 
     // Reference [22]: Microsoft. Introduction to ASP.NET Core SignalR. Microsoft Learn.
@@ -139,6 +150,8 @@ public sealed class MeshSimulator(
             }
 
             if (elapsed % sensor.PublishIntervalSeconds != 0) continue;
+
+            if (_unplugged.TryGetValue(sensor.Id, out var until) && until > DateTimeOffset.UtcNow) continue;
 
             // --- disconnect injection: mute a node for a stretch so the silence timer
             // has something real to catch.

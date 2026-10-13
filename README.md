@@ -358,6 +358,55 @@ from one sensor with an identical timestamp keep only the one that arrived last.
 The self-check's `sorted dictionary:` line feeds readings in the order 3, 1, 4, 2 and
 asserts they read back 1, 2, 3, 4.
 
+### HashSet: disconnected nodes and open error states
+
+A node counts as disconnected once it has missed three publish intervals. The gateway
+checks for that every five seconds, and a node that stays silent fails the check every
+time - without a memory of what it has already reported, each failure would be another
+alert. The anomaly engine keeps two `HashSet<string>`s:
+
+- **disconnected nodes**, by sensor id. A node is added when it is first found silent and
+  removed when it is heard from again.
+- **open error states**, as `sensorId|Kind`. A spike or threshold breach is added when it
+  starts and removed when the reading returns to normal.
+
+`HashSet<T>.Add` returns `false` if the entry is already there. That return value is the
+duplicate test: `true` means a new fault, so the alert is raised; `false` means it was
+raised when the entry went in, so it is skipped and counted. A long outage keeps its one
+alert, which is raised to *Critical* in place after nine missed intervals.
+
+**On the dashboard** (panel: *Disconnect set*):
+
+1. Pick a node and click **Unplug for 60 s**.
+2. Within about ten seconds it appears under *In the disconnect set* and one *Silence*
+   alert appears on the alert rail.
+3. Keep watching for the rest of the minute. *Duplicate alerts skipped* climbs every five
+   seconds, the rail still shows one *Silence* alert for that node, and that alert turns
+   from *Warning* to *Critical*.
+4. When the minute is up (or after **Plug back in**) the node leaves the set.
+
+**With curl:**
+
+```bash
+curl -X POST "http://localhost:5036/api/sensors/A4:CF:12:9B:04:7E/unplug?seconds=60"
+```
+
+```bash
+curl http://localhost:5036/api/faults
+```
+
+```bash
+curl http://localhost:5036/api/alerts
+```
+
+Run the second and third a few times over the minute. `disconnected` lists the node and
+`duplicatesSkipped` keeps rising, while `/api/alerts` holds a single entry with
+`"kind": "Silence"` for it. The simulator also drops nodes at random, so other ids can
+show up in the set on their own.
+
+The self-check's `hash set:` line sweeps a silent node six times and asserts exactly one
+disconnect alert, then holds a reading over its threshold and asserts it is raised once.
+
 ---
 
 ## Architecture
@@ -392,6 +441,7 @@ DTO translation layer and no chance of the two sides drifting.
 | **Collections** | `CircularTelemetryBuffer<T>` - fixed-capacity, array-backed, `IEnumerable<TelemetryPacket<T>>`. An unbounded stream into a `List<T>` grows until the gateway dies; the ring bounds memory *and* provides exactly the window the anomaly detector needs for its rolling baseline. |
 | **Dictionary** | `TelemetryStore` keeps the device registry in a `ConcurrentDictionary<string, SensorRegistration>` keyed by canonical MAC. `TryGet` is the lookup every packet arrival goes through, by MAC or id, and it counts lookups and misses for `GET /api/registry`. The concurrent variant is used because request threads and the ingest worker read it at the same time. |
 | **SortedDictionary** | `TelemetryStore` keeps a `SortedDictionary<DateTimeOffset, TimelinePoint>` per sensor, keyed by the time the reading was taken. `LogReading` inserts wherever the timestamp falls, so packets that arrive out of order are still served in time order by `GET /api/sensors/{id}/timeline` and drawn that way by the dashboard's timeline graph. |
+| **HashSet** | `AnomalyEngine` keeps a `HashSet<string>` of disconnected nodes and another of open error states. `Add` returning `false` means the fault is already known, so the repeat alert is skipped: a node that stays silent raises one disconnect alert, not one per sweep. `GET /api/faults` shows both sets and the count of duplicates skipped. |
 | **File upload** | `MultipartReader` streaming (never `IFormFile` buffering), magic-byte content sniffing, path-traversal stripping, a 25 MB ceiling enforced mid-flight, and AES-256-GCM at rest with per-chunk nonces and authenticated chunk indices. |
 | **Engagement** | The strategy chosen in Part 1 Task 1: anomaly-first visual encoding, severity-ranked rail, z-score spike detection against a rolling baseline, a *separate* silence timer for disconnects, and suppression-not-deletion of repeatedly dismissed alerts. |
 
@@ -424,6 +474,8 @@ Base path `/api`. Enums travel as names.
 | `GET` | `/alerts?includeSuppressed=` | Severity-ranked alert rail |
 | `POST` | `/alerts/{id}/dismiss` | Dismiss, and count toward suppression of that kind |
 | `POST` | `/alerts/restore` | Un-suppress a kind for a node |
+| `GET` | `/faults` | The disconnect set, the open error states and the number of duplicate alerts skipped |
+| `POST` | `/sensors/{id}/unplug?seconds=` | Test trigger: the simulated node stops publishing; `seconds=0` plugs it back in |
 | `GET` | `/topology` | The seeded deployment tree |
 | `POST` | `/topology/validate` | Recursive validation of a supplied tree |
 | `GET` | `/topology/stress?depth=` | Depth-guard demonstration |

@@ -345,6 +345,107 @@
     }
 </section>
 
+@* ------------------------------------------------------------ disconnect set *@
+<section class="panel inspector">
+    <div class="panel-head">
+        <h2>Disconnect set</h2>
+        <span class="count">HashSet&lt;string&gt; &middot; Add returns false for a duplicate</span>
+    </div>
+
+    <p>
+        A node that stays silent fails the silence check every few seconds, and each failure would
+        be another alert. The gateway keeps the silent nodes in a hash set: a node is added when it
+        is first found silent, and a repeat finding is recognised as a duplicate and skipped. Open
+        spikes and threshold breaches are tracked the same way. Unplug a node and watch the rail.
+    </p>
+
+    @if (_faults is not null)
+    {
+        <div class="stats">
+            <div class="stat">
+                <div class="label">Disconnected nodes</div>
+                <div class="value @(_faults.Disconnected.Count > 0 ? "warn" : "ok")">@_faults.Disconnected.Count</div>
+            </div>
+            <div class="stat">
+                <div class="label">Open error states</div>
+                <div class="value @(_faults.ActiveErrors.Count > 0 ? "warn" : "ok")">@_faults.ActiveErrors.Count</div>
+            </div>
+            <div class="stat">
+                <div class="label">Duplicate alerts skipped</div>
+                <div class="value">@_faults.DuplicatesSkipped.ToString("N0")</div>
+            </div>
+        </div>
+    }
+
+    <div class="form-grid" style="margin-top:.8rem">
+        <div class="field">
+            <label for="unplug-sensor">Node</label>
+            <select id="unplug-sensor" value="@_unplugSensor" @onchange="e => _unplugSensor = e.Value?.ToString() ?? string.Empty">
+                @foreach (var sensor in _snapshots)
+                {
+                    <option value="@sensor.Id">@sensor.DisplayName</option>
+                }
+            </select>
+        </div>
+    </div>
+
+    <div class="actions">
+        <button class="danger" @onclick="() => UnplugAsync(60)" disabled="@(_unplugSensor.Length == 0)">Unplug for 60 s</button>
+        <button @onclick="() => UnplugAsync(0)" disabled="@(_unplugSensor.Length == 0)">Plug back in</button>
+    </div>
+    <p class="hint" style="margin-top:.4rem">
+        The node is found silent after three missed publish intervals, checked every five seconds.
+    </p>
+
+    @if (_faults is not null)
+    {
+        <div class="split">
+            <div>
+                <h3>In the disconnect set</h3>
+                @if (_faults.Disconnected.Count == 0)
+                {
+                    <p class="hint">Empty. Every node is reporting.</p>
+                }
+                else
+                {
+                    <ul class="list">
+                        @foreach (var id in _faults.Disconnected)
+                        {
+                            <li>
+                                <span class="tag warn">Silence</span>
+                                <span class="grow">@SensorName(id)</span>
+                                <span class="meta">@_active.Concat(_suppressed).Count(a => a.SensorId == id && a.Kind == AlertKind.Silence) alert(s)</span>
+                            </li>
+                        }
+                    </ul>
+                }
+            </div>
+
+            <div>
+                <h3>Open error states</h3>
+                @if (_faults.ActiveErrors.Count == 0)
+                {
+                    <p class="hint">Empty. No spike or threshold breach is in progress.</p>
+                }
+                else
+                {
+                    <ul class="list">
+                        @foreach (var key in _faults.ActiveErrors)
+                        {
+                            var parts = key.Split('|');
+
+                            <li>
+                                <span class="tag warn">@parts[^1]</span>
+                                <span class="grow">@SensorName(parts[0])</span>
+                            </li>
+                        }
+                    </ul>
+                }
+            </div>
+        </div>
+    }
+</section>
+
 @* ------------------------------------------------------------ manual override commands *@
 <section class="panel inspector">
     <div class="panel-head">
@@ -586,6 +687,9 @@
     private string _timelineSensor = string.Empty;
     private IReadOnlyList<TimelinePoint> _timeline = [];
 
+    private FaultState? _faults;
+    private string _unplugSensor = string.Empty;
+
     private QueueStatus? _queue;
     private QueueEntry? _lastCritical;
     private int _overtaken;   // packets that arrived before _lastCritical but were processed after it
@@ -602,6 +706,7 @@
         await RefreshCommandsAsync();
         await RefreshRegistryAsync();
         await RefreshTimelineAsync();
+        await RefreshFaultsAsync();
 
         _hub = new HubConnectionBuilder()
             .WithUrl(new Uri(Gateway.BaseAddress, "hubs/telemetry"))
@@ -624,12 +729,17 @@
             await RefreshCommandsAsync();
             await RefreshRegistryAsync();
             await RefreshTimelineAsync();
+            await RefreshFaultsAsync();
 
             await InvokeAsync(StateHasChanged);
         });
 
         _hub.On<Alert>(HubEvents.AlertRaised, async alert =>
         {
+            // A long outage re-sends its one alert at a higher severity: replace, never duplicate.
+            _active.RemoveAll(a => a.Id == alert.Id);
+            _suppressed.RemoveAll(a => a.Id == alert.Id);
+
             if (alert.Suppressed) _suppressed.Insert(0, alert);
             else _active.Insert(0, alert);
 
@@ -768,6 +878,18 @@
     {
         await Gateway.ScrambleTimelineAsync(_timelineSensor);
         await RefreshTimelineAsync();
+    }
+
+    private async Task RefreshFaultsAsync()
+    {
+        _faults = await Gateway.GetFaultsAsync() ?? _faults;
+        if (!_snapshots.Any(s => s.Id == _unplugSensor)) _unplugSensor = _snapshots.FirstOrDefault()?.Id ?? string.Empty;
+    }
+
+    private async Task UnplugAsync(int seconds)
+    {
+        await Gateway.UnplugAsync(_unplugSensor, seconds);
+        await RefreshFaultsAsync();
     }
 
     private async Task RefreshCommandsAsync() => _commands = await Gateway.GetCommandsAsync() ?? _commands;

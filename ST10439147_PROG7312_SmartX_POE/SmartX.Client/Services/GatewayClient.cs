@@ -181,6 +181,25 @@ public sealed class GatewayClient(HttpClient http)
     public async Task ScrambleTimelineAsync(string sensorId, CancellationToken ct = default)
         => await http.PostAsync($"api/sensors/{Uri.EscapeDataString(sensorId)}/timeline/scramble", null, ct);
 
+    // ---- disconnect set ----------------------------------------------------
+
+    /// <summary>The disconnected nodes and open error states. Null if the gateway could not be reached.</summary>
+    public async Task<FaultState?> GetFaultsAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            return await http.GetFromJsonAsync<FaultState>("api/faults", SmartXJson.Options, ct);
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Test trigger: the simulated node stops publishing for this long. Zero plugs it back in.</summary>
+    public async Task UnplugAsync(string sensorId, int seconds, CancellationToken ct = default)
+        => await http.PostAsync($"api/sensors/{Uri.EscapeDataString(sensorId)}/unplug?seconds={seconds}", null, ct);
+
     // ---- manual override commands ------------------------------------------
 
     /// <summary>Undo history (newest first) and current overrides. Null if the gateway could not be reached.</summary>
@@ -253,6 +272,9 @@ public sealed record AggregateResult(
 //----------------------------------------------------------------------------------------------------------------------//
 /// <summary>Shape of <c>GET /api/registry</c>.</summary>
 public sealed record RegistryStatus(int Devices, long Lookups, long Misses, List<string> Keys);
+//----------------------------------------------------------------------------------------------------------------------//
+/// <summary>Shape of <c>GET /api/faults</c>. Active errors are <c>sensorId|Kind</c>.</summary>
+public sealed record FaultState(List<string> Disconnected, List<string> ActiveErrors, long DuplicatesSkipped);
 //----------------------------------------------------------------------------------------------------------------------//
 /// <summary>Shape of <c>GET /api/commands</c>. History is the undo stack, top first.</summary>
 public sealed record CommandLog(List<CommandEntry> History, Dictionary<string, bool> Overrides);
