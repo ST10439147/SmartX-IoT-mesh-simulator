@@ -33,6 +33,9 @@ internal static class SelfCheckRunner
 
             foreach (var line in RunCommandChecks())
                 Console.WriteLine($"  ok  {line}");
+
+            foreach (var line in RunRegistryChecks())
+                Console.WriteLine($"  ok  {line}");
         }
         catch (Exception ex)
         {
@@ -192,6 +195,34 @@ internal static class SelfCheckRunner
         Assert(!commands.TryUndo(out _) && commands.History.Count == 0, "the stack is empty again");
 
         log.Add("stack: commands undo last-in-first-out, a batch reverts as one, empty undo is safe");
+        return log;
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    private static IEnumerable<string> RunRegistryChecks()
+    {
+        var log = new List<string>();
+        var store = new TelemetryStore();
+
+        var valve = store.Register(new SensorRegistration
+        {
+            MacAddress = "dc-a6-32-77-11-01",
+            DisplayName = "Drip Line Valve A",
+            DeploymentPath = "Facility A/Zone 1/Sub-Zone A",
+            Category = SensorCategory.IrrigationValve
+        });
+
+        // One device, however the MAC is spelled: the id the gateway issued, the MAC as
+        // it was typed, and a lower-case colon form all land on the same entry.
+        Assert(valve.Id == "DC:A6:32:77:11:01", "the registry key is the MAC with colons, upper case");
+        Assert(store.TryGet(valve.Id, out var byId) && ReferenceEquals(byId, valve), "lookup by id should find the device");
+        Assert(store.TryGet("dc-a6-32-77-11-01", out var byMac) && ReferenceEquals(byMac, valve), "lookup by the MAC as typed should find the same device");
+        Assert(store.TryGet("dc:a6:32:77:11:01", out _), "lookup must not care about case");
+        Assert(!store.TryGet("00:00:00:00:00:00", out _), "an unregistered MAC is a miss, not an exception");
+        Assert(store.Lookups == 4 && store.Misses == 1, $"expected 4 lookups and 1 miss, counted {store.Lookups} and {store.Misses}");
+
+        Assert(store.Remove("dc-a6-32-77-11-01") && !store.Exists(valve.Id), "removing by MAC should remove the device");
+
+        log.Add("dictionary: a device is found by id or by MAC in any spelling, misses are counted");
         return log;
     }
     //----------------------------------------------------------------------------------------------------------------------//

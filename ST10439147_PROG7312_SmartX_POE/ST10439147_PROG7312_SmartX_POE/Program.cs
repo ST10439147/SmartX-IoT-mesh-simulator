@@ -92,7 +92,7 @@ api.MapPost("/sensors", async (
     // convenience, this is the trust boundary. A direct POST bypasses the form entirely.
     var errors = Validate(registration);
 
-    if (store.Exists(registration.MacAddress.Replace('-', ':').ToUpperInvariant()))
+    if (store.Exists(registration.MacAddress))
         errors.TryAdd(nameof(registration.MacAddress), ["A sensor with this MAC address is already registered."]);
 
     if (!TopologyValidator.PathExists(store.Topology, registration.DeploymentPath))
@@ -115,6 +115,19 @@ api.MapDelete("/sensors/{id}", async (string id, TelemetryStore store, IHubConte
     await hub.Clients.All.SendAsync(HubEvents.SensorsChanged, id);
     return Results.NoContent();
 });
+
+// ---------------------------------------------------------------- device registry
+
+// The dictionary behind every packet arrival, made visible: how many devices it holds,
+// how many lookups it has answered and how many of those missed. To look one device up
+// by MAC or id, in any spelling, use GET /api/sensors/{id}.
+api.MapGet("/registry", (TelemetryStore store) => Results.Ok(new
+{
+    devices = store.Sensors.Count,
+    lookups = store.Lookups,
+    misses = store.Misses,
+    keys = store.Sensors.Select(s => s.Id).Order()
+}));
 
 // ---------------------------------------------------------------- telemetry
 

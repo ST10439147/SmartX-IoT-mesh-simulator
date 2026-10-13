@@ -137,6 +137,30 @@ public sealed class GatewayClient(HttpClient http)
     public async Task<StressResult?> StressTopologyAsync(int depth, CancellationToken ct = default)
         => await http.GetFromJsonAsync<StressResult>($"api/topology/stress?depth={depth}", SmartXJson.Options, ct);
 
+    // ---- device registry ---------------------------------------------------
+
+    /// <summary>Registry size and lookup counters. Null if the gateway could not be reached.</summary>
+    public async Task<RegistryStatus?> GetRegistryAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            return await http.GetFromJsonAsync<RegistryStatus>("api/registry", SmartXJson.Options, ct);
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Looks one device up by MAC or id, in whatever spelling it was typed. Null when there is no such device.</summary>
+    public async Task<SensorSnapshot?> FindSensorAsync(string macOrId, CancellationToken ct = default)
+    {
+        var response = await http.GetAsync($"api/sensors/{Uri.EscapeDataString(macOrId)}", ct);
+        return response.IsSuccessStatusCode
+            ? await response.Content.ReadFromJsonAsync<SensorSnapshot>(SmartXJson.Options, ct)
+            : null;
+    }
+
     // ---- manual override commands ------------------------------------------
 
     /// <summary>Undo history (newest first) and current overrides. Null if the gateway could not be reached.</summary>
@@ -206,6 +230,9 @@ public sealed record AggregateResult(
     AggregateValue Delta,
     bool LeftDrawsMore,
     bool Equal);
+//----------------------------------------------------------------------------------------------------------------------//
+/// <summary>Shape of <c>GET /api/registry</c>.</summary>
+public sealed record RegistryStatus(int Devices, long Lookups, long Misses, List<string> Keys);
 //----------------------------------------------------------------------------------------------------------------------//
 /// <summary>Shape of <c>GET /api/commands</c>. History is the undo stack, top first.</summary>
 public sealed record CommandLog(List<CommandEntry> History, Dictionary<string, bool> Overrides);

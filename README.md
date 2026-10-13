@@ -261,6 +261,52 @@ last-in-first-out undo.
 
 ---
 
+## Testing the lookup structures
+
+Same setup as above: the app running and the **Live dashboard** open.
+
+### Dictionary: the device registry
+
+Every packet names the node that sent it, and the gateway has to find that node before it
+can do anything else. The registry is a dictionary keyed by MAC address, so the lookup is
+a single hash probe - O(1) on average - instead of a scan through every registered
+device. It runs twice per packet: once when `POST /api/telemetry` accepts the reading and
+once when the background worker ingests it.
+
+The key is the MAC with colons and in upper case, which is also the `id` the gateway
+returns on registration. `a4-cf-12-9b-04-7e`, `A4:CF:12:9B:04:7E` and the id all reach the
+same entry.
+
+**On the dashboard** (panel: *Device registry*):
+
+1. Watch *Lookups* climb as the simulated mesh publishes. *Devices* stays at 12.
+2. Type `a4-cf-12-9b-04-7e` (dashes, lower case) and click **Look up**. It finds
+   *Soil Moisture North* under the id `A4:CF:12:9B:04:7E`.
+3. Type `00:00:00:00:00:00` and click **Look up**. Nothing is found and *Misses* goes up
+   by one.
+
+**With curl:**
+
+```bash
+curl http://localhost:5036/api/registry
+```
+
+```bash
+curl http://localhost:5036/api/sensors/a4-cf-12-9b-04-7e
+```
+
+```bash
+curl -X POST http://localhost:5036/api/telemetry -H "Content-Type: application/json" -d "{\"sensorId\":\"a4-cf-12-9b-04-7e\",\"value\":31}"
+```
+
+The first returns `devices`, `lookups`, `misses` and the registry `keys`. The second finds
+a device from a MAC typed with dashes. The third is a packet arriving with the MAC spelled
+that way: it is accepted with `202`, where an unregistered MAC gets `404`.
+
+The self-check's `dictionary:` line covers the same lookups.
+
+---
+
 ## Architecture
 
 ```
@@ -291,6 +337,7 @@ DTO translation layer and no chance of the two sides drifting.
 | **Arrays** | Ragged poll cycles stage in `float[][]` (each cycle really does return a different sample count), project to a rectangular, NaN-padded `float[,]`, then flush into `List<TelemetryPacket<float>>`. `GET /api/sensors/{id}/archive` shows the jagged rows beside the projection's shape. |
 | **Recursion** | `TopologyValidator` walks Facility → Zone → Sub-Zone → Node, reporting issues by breadcrumb path, with a depth ceiling and a cycle guard so a malformed tree is an error rather than a `StackOverflowException`. |
 | **Collections** | `CircularTelemetryBuffer<T>` - fixed-capacity, array-backed, `IEnumerable<TelemetryPacket<T>>`. An unbounded stream into a `List<T>` grows until the gateway dies; the ring bounds memory *and* provides exactly the window the anomaly detector needs for its rolling baseline. |
+| **Dictionary** | `TelemetryStore` keeps the device registry in a `ConcurrentDictionary<string, SensorRegistration>` keyed by canonical MAC. `TryGet` is the lookup every packet arrival goes through, by MAC or id, and it counts lookups and misses for `GET /api/registry`. The concurrent variant is used because request threads and the ingest worker read it at the same time. |
 | **File upload** | `MultipartReader` streaming (never `IFormFile` buffering), magic-byte content sniffing, path-traversal stripping, a 25 MB ceiling enforced mid-flight, and AES-256-GCM at rest with per-chunk nonces and authenticated chunk indices. |
 | **Engagement** | The strategy chosen in Part 1 Task 1: anomaly-first visual encoding, severity-ranked rail, z-score spike detection against a rolling baseline, a *separate* silence timer for disconnects, and suppression-not-deletion of repeatedly dismissed alerts. |
 
@@ -304,7 +351,8 @@ Base path `/api`. Enums travel as names.
 |---|---|---|
 | `GET` | `/health` | Gateway status: uptime, node count, throughput, alert counts |
 | `GET` | `/sensors` | All sensor snapshots (value, baseline, sparkline, silence state) |
-| `GET` | `/sensors/{id}` | One snapshot |
+| `GET` | `/sensors/{id}` | One snapshot. `{id}` is the id or the MAC in any spelling, here and on every other sensor route |
+| `GET` | `/registry` | Device registry: device count, lookups, misses, keys |
 | `GET` | `/sensors/{id}/profile` | The stored registration |
 | `POST` | `/sensors` | Register a node - 400 with field-level errors on invalid input |
 | `DELETE` | `/sensors/{id}` | Deregister |

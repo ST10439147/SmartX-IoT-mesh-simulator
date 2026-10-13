@@ -13,6 +13,14 @@ namespace SmartX.Api.Services;
 /// quietly starts boxing again. Each payload type gets its own dictionary of typed ring
 /// buffers, and <see cref="SensorRegistration.Payload"/> says which one a node belongs
 /// to. Nothing on the ingest path ever touches <see cref="object"/>.</para>
+///
+/// <para><b>The device registry is a dictionary.</b> <c>_sensors</c> maps a node's key to
+/// its registration, and it is consulted on every packet arrival - once at the ingest
+/// door and once more when the worker lands the packet. A hash lookup is O(1) on
+/// average, so the cost of finding a device does not grow with the size of the mesh; a
+/// <c>List</c> scan would be O(n) per packet. The key is the MAC in canonical form
+/// (<see cref="KeyFor"/>), which is also the id the gateway hands back, so a node can be
+/// found by either, however the MAC was typed.</para>
 /// </summary>
 // ponytail: in-memory only, wiped on restart. Swap the dictionaries for a time-series
 // store (or even SQLite) if history has to outlive the process.
@@ -33,6 +41,8 @@ public sealed class TelemetryStore
     private readonly ConcurrentDictionary<string, DateTimeOffset> _lastSeen = new(StringComparer.OrdinalIgnoreCase);
 
     private long _packetsIngested;
+    private long _lookups;
+    private long _misses;
 
     public DateTimeOffset StartedAt { get; } = DateTimeOffset.UtcNow;
 
@@ -43,15 +53,36 @@ public sealed class TelemetryStore
 
     public IReadOnlyCollection<SensorRegistration> Sensors => _sensors.Values.ToList();
 
-    public bool TryGet(string id, out SensorRegistration sensor) => _sensors.TryGetValue(id, out sensor!);
+    /// <summary>
+    /// The registry key for a MAC or id: colons, upper case. <c>a4-cf-12-9b-04-7e</c> and
+    /// <c>A4:CF:12:9B:04:7E</c> are the same device and must hash to the same entry.
+    /// </summary>
+    public static string KeyFor(string macOrId) => macOrId.Trim().Replace('-', ':').ToUpperInvariant();
 
-    public bool Exists(string id) => _sensors.ContainsKey(id);
+    /// <summary>The registry lookup: one hash probe by MAC or id, counted so it can be shown.</summary>
+    // Reference: Microsoft. Dictionary<TKey,TValue> Class. Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/api/system.collections.generic.dictionary-2
+    public bool TryGet(string macOrId, out SensorRegistration sensor)
+    {
+        Interlocked.Increment(ref _lookups);
+        if (_sensors.TryGetValue(KeyFor(macOrId), out sensor!)) return true;
+
+        Interlocked.Increment(ref _misses);
+        return false;
+    }
+
+    public bool Exists(string macOrId) => _sensors.ContainsKey(KeyFor(macOrId));
+
+    /// <summary>Registry lookups since boot, and how many of them found no device.</summary>
+    public long Lookups => Interlocked.Read(ref _lookups);
+
+    public long Misses => Interlocked.Read(ref _misses);
     //----------------------------------------------------------------------------------------------------------------------//
 
     /// <summary>Registers a node and allocates its typed ring buffer. Idempotent on the MAC.</summary>
     public SensorRegistration Register(SensorRegistration sensor)
     {
-        sensor.Id = sensor.MacAddress.Replace('-', ':').ToUpperInvariant();
+        sensor.Id = KeyFor(sensor.MacAddress);
         sensor.RegisteredAt = DateTimeOffset.UtcNow;
         _sensors[sensor.Id] = sensor;
 
@@ -75,6 +106,7 @@ public sealed class TelemetryStore
     //----------------------------------------------------------------------------------------------------------------------//
     public bool Remove(string id)
     {
+        id = KeyFor(id);
         _floats.TryRemove(id, out _);
         _integers.TryRemove(id, out _);
         _booleans.TryRemove(id, out _);

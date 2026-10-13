@@ -229,6 +229,60 @@
     </section>
 }
 
+@* ------------------------------------------------------------ device registry *@
+<section class="panel inspector">
+    <div class="panel-head">
+        <h2>Device registry</h2>
+        <span class="count">Dictionary&lt;MAC, device&gt; &middot; one hash lookup per packet</span>
+    </div>
+
+    <p>
+        Every packet names the node that sent it, and the gateway finds that node in a dictionary
+        keyed by MAC address. The lookup costs the same whether the mesh has twelve nodes or twelve
+        thousand. Type a MAC in any spelling to look a device up the same way a packet does.
+    </p>
+
+    @if (_registry is not null)
+    {
+        <div class="stats">
+            <div class="stat">
+                <div class="label">Devices</div>
+                <div class="value">@_registry.Devices</div>
+            </div>
+            <div class="stat">
+                <div class="label">Lookups</div>
+                <div class="value">@_registry.Lookups.ToString("N0")</div>
+            </div>
+            <div class="stat">
+                <div class="label">Misses</div>
+                <div class="value @(_registry.Misses > 0 ? "warn" : "ok")">@_registry.Misses.ToString("N0")</div>
+            </div>
+        </div>
+    }
+
+    <div class="form-grid" style="margin-top:.8rem">
+        <div class="field">
+            <label for="registry-key">MAC address or id</label>
+            <input id="registry-key" @bind="_registryKey" placeholder="a4-cf-12-9b-04-7e" />
+        </div>
+    </div>
+
+    <div class="actions">
+        <button @onclick="LookupAsync" disabled="@string.IsNullOrWhiteSpace(_registryKey)">Look up</button>
+    </div>
+
+    @if (_registryHit is not null)
+    {
+        <p class="hint" style="margin-top:.5rem">
+            Found <code>@_registryHit.Id</code>: @_registryHit.DisplayName, @_registryHit.DeploymentPath.
+        </p>
+    }
+    else if (_registryMissed)
+    {
+        <p class="hint" style="margin-top:.5rem">No device is registered under that MAC. The miss has been counted.</p>
+    }
+</section>
+
 @* ------------------------------------------------------------ manual override commands *@
 <section class="panel inspector">
     <div class="panel-head">
@@ -462,6 +516,11 @@
     private CommandLog? _commands;
     private List<SensorSnapshot> _actuators = [];
 
+    private RegistryStatus? _registry;
+    private string _registryKey = string.Empty;
+    private SensorSnapshot? _registryHit;
+    private bool _registryMissed;
+
     private QueueStatus? _queue;
     private QueueEntry? _lastCritical;
     private int _overtaken;   // packets that arrived before _lastCritical but were processed after it
@@ -476,6 +535,7 @@
         SortAlerts(await Gateway.GetAlertsAsync());
         await RefreshQueueAsync();
         await RefreshCommandsAsync();
+        await RefreshRegistryAsync();
 
         _hub = new HubConnectionBuilder()
             .WithUrl(new Uri(Gateway.BaseAddress, "hubs/telemetry"))
@@ -496,6 +556,7 @@
             // The queue has no push event of its own; the once-a-second tick is the cue to re-read it.
             await RefreshQueueAsync();
             await RefreshCommandsAsync();
+            await RefreshRegistryAsync();
 
             await InvokeAsync(StateHasChanged);
         });
@@ -609,6 +670,15 @@
 
     private async Task AggregateAsync()
         => _aggregate = await Gateway.AggregateAsync(_aggregateA, _aggregateB);
+
+    private async Task RefreshRegistryAsync() => _registry = await Gateway.GetRegistryAsync() ?? _registry;
+
+    private async Task LookupAsync()
+    {
+        _registryHit = await Gateway.FindSensorAsync(_registryKey.Trim());
+        _registryMissed = _registryHit is null;
+        await RefreshRegistryAsync();
+    }
 
     private async Task RefreshCommandsAsync() => _commands = await Gateway.GetCommandsAsync() ?? _commands;
 
