@@ -2,9 +2,9 @@ name: CI/CD
 
 on:
   push:
-    branches: [main, Service, feat-frontend, queues, dev, feat-foundation, feat-stack, feat-deviceReg]
+    branches: [main, Service, feat-frontend, queues, dev, feat-foundation, feat-stack, feat-deviceReg, feat-commands]
   pull_request:
-    branches: [main, Service, feat-frontend, queues, dev, feat-foundation, feat-stack, feat-deviceReg]
+    branches: [main, Service, feat-frontend, queues, dev, feat-foundation, feat-stack, feat-deviceReg, feat-commands]
 
 env:
   DOTNET_VERSION: "10.0.x"
