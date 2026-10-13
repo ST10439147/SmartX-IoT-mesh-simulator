@@ -261,6 +261,154 @@ last-in-first-out undo.
 
 ---
 
+## Testing the lookup structures
+
+Same setup as above: the app running and the **Live dashboard** open.
+
+### Dictionary: the device registry
+
+Every packet names the node that sent it, and the gateway has to find that node before it
+can do anything else. The registry is a dictionary keyed by MAC address, so the lookup is
+a single hash probe - O(1) on average - instead of a scan through every registered
+device. It runs twice per packet: once when `POST /api/telemetry` accepts the reading and
+once when the background worker ingests it.
+
+The key is the MAC with colons and in upper case, which is also the `id` the gateway
+returns on registration. `a4-cf-12-9b-04-7e`, `A4:CF:12:9B:04:7E` and the id all reach the
+same entry.
+
+**On the dashboard** (panel: *Device registry*):
+
+1. Watch *Lookups* climb as the simulated mesh publishes. *Devices* stays at 12.
+2. Type `a4-cf-12-9b-04-7e` (dashes, lower case) and click **Look up**. It finds
+   *Soil Moisture North* under the id `A4:CF:12:9B:04:7E`.
+3. Type `00:00:00:00:00:00` and click **Look up**. Nothing is found and *Misses* goes up
+   by one.
+
+**With curl:**
+
+```bash
+curl http://localhost:5036/api/registry
+```
+
+```bash
+curl http://localhost:5036/api/sensors/a4-cf-12-9b-04-7e
+```
+
+```bash
+curl -X POST http://localhost:5036/api/telemetry -H "Content-Type: application/json" -d "{\"sensorId\":\"a4-cf-12-9b-04-7e\",\"value\":31}"
+```
+
+The first returns `devices`, `lookups`, `misses` and the registry `keys`. The second finds
+a device from a MAC typed with dashes. The third is a packet arriving with the MAC spelled
+that way: it is accepted with `202`, where an unregistered MAC gets `404`.
+
+The self-check's `dictionary:` line covers the same lookups.
+
+### SortedDictionary: the sensor timeline
+
+A mesh relays packets over several hops, so they do not always reach the gateway in the
+order the nodes sent them. A reading may carry the node's own `timestamp`; if it does not,
+the gateway stamps it on arrival. Each sensor's log is a
+`SortedDictionary<DateTimeOffset, TimelinePoint>` keyed by that timestamp, so a late
+packet is inserted where it belongs in time (O(log n)) and the log reads back already in
+order. Nothing is re-sorted when the graph asks for it. The log keeps the newest 240
+readings per sensor.
+
+**On the dashboard** (panel: *Sensor timeline*):
+
+1. Pick a sensor. The graph plots its last 60 readings against the time each was taken.
+2. Click **Send 8 packets out of order**. The gateway receives eight backdated readings
+   for that sensor in shuffled order.
+3. The line under the graph reports 8 late readings and the graph marks each with a dashed
+   line. In the table the late rows are highlighted: *taken at* still runs in order down
+   the whole table, while their *arrived* numbers are higher than the rows above them and
+   out of sequence with each other.
+
+**With curl:**
+
+```bash
+curl -X POST "http://localhost:5036/api/sensors/A4:CF:12:9B:04:7E/timeline/scramble?count=5"
+```
+
+```bash
+curl "http://localhost:5036/api/sensors/A4:CF:12:9B:04:7E/timeline?samples=12"
+```
+
+The first response lists the timestamps in the order they were sent. In the second, `at`
+ascends from the first entry to the last, while `sequence` (arrival order) does not:
+
+```
+at 12:31:02.37  sequence 1074
+at 12:31:03.37  sequence 1089   late
+at 12:31:04.37  sequence 1084
+at 12:31:05.37  sequence 1088   late
+at 12:31:06.37  sequence 1099
+```
+
+To send a single late packet yourself, add a `timestamp` to a normal reading:
+
+```bash
+curl -X POST http://localhost:5036/api/telemetry -H "Content-Type: application/json" -d "{\"sensorId\":\"A4:CF:12:9B:04:7E\",\"value\":31,\"timestamp\":\"2026-01-01T08:00:00Z\"}"
+```
+
+A timestamp more than five seconds in the future is rejected with `400`. Two readings
+from one sensor with an identical timestamp keep only the one that arrived last.
+
+The self-check's `sorted dictionary:` line feeds readings in the order 3, 1, 4, 2 and
+asserts they read back 1, 2, 3, 4.
+
+### HashSet: disconnected nodes and open error states
+
+A node counts as disconnected once it has missed three publish intervals. The gateway
+checks for that every five seconds, and a node that stays silent fails the check every
+time - without a memory of what it has already reported, each failure would be another
+alert. The anomaly engine keeps two `HashSet<string>`s:
+
+- **disconnected nodes**, by sensor id. A node is added when it is first found silent and
+  removed when it is heard from again.
+- **open error states**, as `sensorId|Kind`. A spike or threshold breach is added when it
+  starts and removed when the reading returns to normal.
+
+`HashSet<T>.Add` returns `false` if the entry is already there. That return value is the
+duplicate test: `true` means a new fault, so the alert is raised; `false` means it was
+raised when the entry went in, so it is skipped and counted. A long outage keeps its one
+alert, which is raised to *Critical* in place after nine missed intervals.
+
+**On the dashboard** (panel: *Disconnect set*):
+
+1. Pick a node and click **Unplug for 60 s**.
+2. Within about ten seconds it appears under *In the disconnect set* and one *Silence*
+   alert appears on the alert rail.
+3. Keep watching for the rest of the minute. *Duplicate alerts skipped* climbs every five
+   seconds, the rail still shows one *Silence* alert for that node, and that alert turns
+   from *Warning* to *Critical*.
+4. When the minute is up (or after **Plug back in**) the node leaves the set.
+
+**With curl:**
+
+```bash
+curl -X POST "http://localhost:5036/api/sensors/A4:CF:12:9B:04:7E/unplug?seconds=60"
+```
+
+```bash
+curl http://localhost:5036/api/faults
+```
+
+```bash
+curl http://localhost:5036/api/alerts
+```
+
+Run the second and third a few times over the minute. `disconnected` lists the node and
+`duplicatesSkipped` keeps rising, while `/api/alerts` holds a single entry with
+`"kind": "Silence"` for it. The simulator also drops nodes at random, so other ids can
+show up in the set on their own.
+
+The self-check's `hash set:` line sweeps a silent node six times and asserts exactly one
+disconnect alert, then holds a reading over its threshold and asserts it is raised once.
+
+---
+
 ## Architecture
 
 ```
@@ -291,6 +439,9 @@ DTO translation layer and no chance of the two sides drifting.
 | **Arrays** | Ragged poll cycles stage in `float[][]` (each cycle really does return a different sample count), project to a rectangular, NaN-padded `float[,]`, then flush into `List<TelemetryPacket<float>>`. `GET /api/sensors/{id}/archive` shows the jagged rows beside the projection's shape. |
 | **Recursion** | `TopologyValidator` walks Facility → Zone → Sub-Zone → Node, reporting issues by breadcrumb path, with a depth ceiling and a cycle guard so a malformed tree is an error rather than a `StackOverflowException`. |
 | **Collections** | `CircularTelemetryBuffer<T>` - fixed-capacity, array-backed, `IEnumerable<TelemetryPacket<T>>`. An unbounded stream into a `List<T>` grows until the gateway dies; the ring bounds memory *and* provides exactly the window the anomaly detector needs for its rolling baseline. |
+| **Dictionary** | `TelemetryStore` keeps the device registry in a `ConcurrentDictionary<string, SensorRegistration>` keyed by canonical MAC. `TryGet` is the lookup every packet arrival goes through, by MAC or id, and it counts lookups and misses for `GET /api/registry`. The concurrent variant is used because request threads and the ingest worker read it at the same time. |
+| **SortedDictionary** | `TelemetryStore` keeps a `SortedDictionary<DateTimeOffset, TimelinePoint>` per sensor, keyed by the time the reading was taken. `LogReading` inserts wherever the timestamp falls, so packets that arrive out of order are still served in time order by `GET /api/sensors/{id}/timeline` and drawn that way by the dashboard's timeline graph. |
+| **HashSet** | `AnomalyEngine` keeps a `HashSet<string>` of disconnected nodes and another of open error states. `Add` returning `false` means the fault is already known, so the repeat alert is skipped: a node that stays silent raises one disconnect alert, not one per sweep. `GET /api/faults` shows both sets and the count of duplicates skipped. |
 | **File upload** | `MultipartReader` streaming (never `IFormFile` buffering), magic-byte content sniffing, path-traversal stripping, a 25 MB ceiling enforced mid-flight, and AES-256-GCM at rest with per-chunk nonces and authenticated chunk indices. |
 | **Engagement** | The strategy chosen in Part 1 Task 1: anomaly-first visual encoding, severity-ranked rail, z-score spike detection against a rolling baseline, a *separate* silence timer for disconnects, and suppression-not-deletion of repeatedly dismissed alerts. |
 
@@ -304,13 +455,16 @@ Base path `/api`. Enums travel as names.
 |---|---|---|
 | `GET` | `/health` | Gateway status: uptime, node count, throughput, alert counts |
 | `GET` | `/sensors` | All sensor snapshots (value, baseline, sparkline, silence state) |
-| `GET` | `/sensors/{id}` | One snapshot |
+| `GET` | `/sensors/{id}` | One snapshot. `{id}` is the id or the MAC in any spelling, here and on every other sensor route |
+| `GET` | `/registry` | Device registry: device count, lookups, misses, keys |
 | `GET` | `/sensors/{id}/profile` | The stored registration |
 | `POST` | `/sensors` | Register a node - 400 with field-level errors on invalid input |
 | `DELETE` | `/sensors/{id}` | Deregister |
 | `GET` | `/sensors/{id}/history?samples=n` | Typed `TelemetryPacket<T>` history straight off the ring |
 | `GET` | `/sensors/{id}/archive` | Float sensors only: jagged staging rows, the shape of their rectangular projection, the newest flushed packets |
-| `POST` | `/telemetry` | Ingest one reading `{ sensorId, value }` - queued, then ingested by the background worker |
+| `GET` | `/sensors/{id}/timeline?samples=n` | The sensor's log in timestamp order, each point with its arrival `sequence` |
+| `POST` | `/sensors/{id}/timeline/scramble?count=` | Test trigger: receive backdated readings for the sensor in shuffled order |
+| `POST` | `/telemetry` | Ingest one reading `{ sensorId, value, timestamp? }` - queued, then ingested by the background worker |
 | `GET` | `/queue` | Queue depth per lane and the recent processing order |
 | `POST` | `/queue/flood?count=&delayMs=` | Test trigger: back the normal lane up and slow the worker |
 | `GET` | `/commands` | Override command history (newest first) and current overrides |
@@ -320,6 +474,8 @@ Base path `/api`. Enums travel as names.
 | `GET` | `/alerts?includeSuppressed=` | Severity-ranked alert rail |
 | `POST` | `/alerts/{id}/dismiss` | Dismiss, and count toward suppression of that kind |
 | `POST` | `/alerts/restore` | Un-suppress a kind for a node |
+| `GET` | `/faults` | The disconnect set, the open error states and the number of duplicate alerts skipped |
+| `POST` | `/sensors/{id}/unplug?seconds=` | Test trigger: the simulated node stops publishing; `seconds=0` plugs it back in |
 | `GET` | `/topology` | The seeded deployment tree |
 | `POST` | `/topology/validate` | Recursive validation of a supplied tree |
 | `GET` | `/topology/stress?depth=` | Depth-guard demonstration |

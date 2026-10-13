@@ -38,7 +38,9 @@ builder.Services.AddSingleton<CommandService>();
 // Reference [23]: Microsoft. Background tasks with hosted services in ASP.NET Core. Microsoft Learn.
 //   https://learn.microsoft.com/aspnet/core/fundamentals/host/hosted-services
 builder.Services.AddHostedService<IngestWorker>();
-builder.Services.AddHostedService<MeshSimulator>();
+// Registered as a singleton too, so the unplug endpoint can reach the running simulator.
+builder.Services.AddSingleton<MeshSimulator>();
+builder.Services.AddHostedService(services => services.GetRequiredService<MeshSimulator>());
 // Reference [22]: Microsoft. Introduction to ASP.NET Core SignalR. Microsoft Learn.
 //   https://learn.microsoft.com/aspnet/core/signalr/introduction
 builder.Services.AddSignalR().AddJsonProtocol(options => SmartXJson.Configure(options.PayloadSerializerOptions));
@@ -92,7 +94,7 @@ api.MapPost("/sensors", async (
     // convenience, this is the trust boundary. A direct POST bypasses the form entirely.
     var errors = Validate(registration);
 
-    if (store.Exists(registration.MacAddress.Replace('-', ':').ToUpperInvariant()))
+    if (store.Exists(registration.MacAddress))
         errors.TryAdd(nameof(registration.MacAddress), ["A sensor with this MAC address is already registered."]);
 
     if (!TopologyValidator.PathExists(store.Topology, registration.DeploymentPath))
@@ -116,6 +118,19 @@ api.MapDelete("/sensors/{id}", async (string id, TelemetryStore store, IHubConte
     return Results.NoContent();
 });
 
+// ---------------------------------------------------------------- device registry
+
+// The dictionary behind every packet arrival, made visible: how many devices it holds,
+// how many lookups it has answered and how many of those missed. To look one device up
+// by MAC or id, in any spelling, use GET /api/sensors/{id}.
+api.MapGet("/registry", (TelemetryStore store) => Results.Ok(new
+{
+    devices = store.Sensors.Count,
+    lookups = store.Lookups,
+    misses = store.Misses,
+    keys = store.Sensors.Select(s => s.Id).Order()
+}));
+
 // ---------------------------------------------------------------- telemetry
 
 // The ingest door for the mesh: the simulator posts here exactly as a real node would.
@@ -126,6 +141,12 @@ api.MapPost("/telemetry", (TelemetryReading reading, TelemetryStore store, Anoma
 {
     if (reading.SensorId is null || !store.TryGet(reading.SensorId, out var sensor))
         return Results.NotFound(new { message = $"No sensor registered with id '{reading.SensorId}'." });
+
+    // A node may stamp the reading with its own clock. An old timestamp is a late packet
+    // and is welcome; one from the future is a broken clock, and would sit at the end of
+    // the timeline ahead of every real reading.
+    if (reading.Timestamp > DateTimeOffset.UtcNow.AddSeconds(5))
+        return Results.BadRequest(new { message = "Timestamp is in the future." });
 
     var value = reading.Value;
     double queued;
@@ -146,7 +167,7 @@ api.MapPost("/telemetry", (TelemetryReading reading, TelemetryStore store, Anoma
     }
 
     // A reading that would breach a threshold or is a spike goes in the priority lane.
-    return queue.TryEnqueue(sensor.Id, queued, anomalies.Classify(sensor, queued))
+    return queue.TryEnqueue(sensor.Id, queued, anomalies.Classify(sensor, queued), reading.Timestamp)
         ? Results.Accepted()
         : Results.Problem("Ingest queue is full.", statusCode: StatusCodes.Status503ServiceUnavailable);
 });
@@ -261,6 +282,41 @@ api.MapGet("/sensors/{id}/history", (string id, TelemetryStore store, [FromQuery
     };
 });
 
+// The sensor's log in timestamp order, straight out of its SortedDictionary. `sequence`
+// is the order each reading arrived in; where it runs backwards, a packet arrived late.
+api.MapGet("/sensors/{id}/timeline", (string id, TelemetryStore store, [FromQuery] int samples = 60) =>
+    store.TryGet(id, out var sensor)
+        ? Results.Ok(store.Timeline(sensor.Id, samples))
+        : Results.NotFound());
+
+// Test trigger: sends a handful of backdated readings for one sensor in shuffled order,
+// the way a mesh delivers packets that took different routes. Each repeats the sensor's
+// latest value, so none of them is an anomaly. GET the timeline afterwards: `at` still
+// ascends while `sequence` does not.
+api.MapPost("/sensors/{id}/timeline/scramble", (string id, TelemetryStore store, IngestQueue queue, [FromQuery] int count = 8) =>
+{
+    if (!store.TryGet(id, out var sensor)) return Results.NotFound();
+
+    var value = store.LatestNumeric(sensor.Id);
+    if (double.IsNaN(value)) return Results.Conflict(new { message = "This sensor has not published yet." });
+
+    // One per publish interval going back from now, offset by half an interval so each
+    // falls between two readings the node really sent. The newest is 1.5 intervals old,
+    // so every one of them is older than a reading the gateway already has.
+    var now = DateTimeOffset.UtcNow;
+    var sent = Enumerable.Range(1, Math.Clamp(count, 2, 20))
+        .Select(i => now.AddSeconds(-(i + 0.5) * sensor.PublishIntervalSeconds))
+        .ToArray();
+
+    // Oldest-first would be in order. A shuffle can land on that, so turn it round if it does.
+    Random.Shared.Shuffle(sent);
+    if (sent.SequenceEqual(sent.Order())) Array.Reverse(sent);
+
+    foreach (var at in sent) queue.TryEnqueue(sensor.Id, value, sentAt: at);
+
+    return Results.Accepted($"/api/sensors/{sensor.Id}/timeline", new { sentInThisOrder = sent });
+});
+
 // Shows the jagged staging area and its rectangular projection side by side.
 api.MapGet("/sensors/{id}/archive", (string id, TelemetryStore store) =>
 {
@@ -327,6 +383,29 @@ api.MapPost("/alerts/restore", (RestoreRequest request, AnomalyEngine anomalies)
 {
     anomalies.Restore(request.SensorId, request.Kind);
     return Results.NoContent();
+});
+
+// The two hash sets behind "one fault, one alert": which nodes are known to be
+// disconnected, which error states are open (as sensorId|Kind), and how many repeat
+// alerts were skipped because the fault was already in a set.
+api.MapGet("/faults", (AnomalyEngine anomalies) => Results.Ok(new
+{
+    disconnected = anomalies.Disconnected,
+    activeErrors = anomalies.ActiveErrors,
+    duplicatesSkipped = anomalies.DuplicatesSkipped
+}));
+
+// Test trigger: the simulated node stops publishing for a while, as if unplugged. The
+// silence sweep finds it within a few seconds and keeps finding it; GET /api/alerts
+// should still show one Silence alert for it. seconds=0 plugs it back in.
+api.MapPost("/sensors/{id}/unplug", (string id, TelemetryStore store, MeshSimulator mesh, [FromQuery] int seconds = 60) =>
+{
+    if (!store.TryGet(id, out var sensor)) return Results.NotFound();
+
+    seconds = Math.Clamp(seconds, 0, 600);
+    mesh.Unplug(sensor.Id, TimeSpan.FromSeconds(seconds));
+
+    return Results.Accepted("/api/faults", new { sensor.Id, silentForSeconds = seconds });
 });
 
 // ---------------------------------------------------------------- topology (recursion)
@@ -439,5 +518,6 @@ internal sealed record RestoreRequest(string SensorId, AlertKind Kind);
 internal sealed record CommandRequest(string? SensorId, SensorCategory? Category, bool State);
 
 // Value stays a JsonElement until the sensor's payload kind says which type to read it as.
-internal sealed record TelemetryReading(string SensorId, JsonElement Value);
+// Timestamp is optional: a node without a clock leaves it out and the gateway stamps arrival.
+internal sealed record TelemetryReading(string SensorId, JsonElement Value, DateTimeOffset? Timestamp = null);
 //---------------------------DDDDDDDDDDDoooooooooooooo END OF FILE DDDDDDDDDDDoooooooooooooo---------------------------//

@@ -229,6 +229,223 @@
     </section>
 }
 
+@* ------------------------------------------------------------ device registry *@
+<section class="panel inspector">
+    <div class="panel-head">
+        <h2>Device registry</h2>
+        <span class="count">Dictionary&lt;MAC, device&gt; &middot; one hash lookup per packet</span>
+    </div>
+
+    <p>
+        Every packet names the node that sent it, and the gateway finds that node in a dictionary
+        keyed by MAC address. The lookup costs the same whether the mesh has twelve nodes or twelve
+        thousand. Type a MAC in any spelling to look a device up the same way a packet does.
+    </p>
+
+    @if (_registry is not null)
+    {
+        <div class="stats">
+            <div class="stat">
+                <div class="label">Devices</div>
+                <div class="value">@_registry.Devices</div>
+            </div>
+            <div class="stat">
+                <div class="label">Lookups</div>
+                <div class="value">@_registry.Lookups.ToString("N0")</div>
+            </div>
+            <div class="stat">
+                <div class="label">Misses</div>
+                <div class="value @(_registry.Misses > 0 ? "warn" : "ok")">@_registry.Misses.ToString("N0")</div>
+            </div>
+        </div>
+    }
+
+    <div class="form-grid" style="margin-top:.8rem">
+        <div class="field">
+            <label for="registry-key">MAC address or id</label>
+            <input id="registry-key" @bind="_registryKey" placeholder="a4-cf-12-9b-04-7e" />
+        </div>
+    </div>
+
+    <div class="actions">
+        <button @onclick="LookupAsync" disabled="@string.IsNullOrWhiteSpace(_registryKey)">Look up</button>
+    </div>
+
+    @if (_registryHit is not null)
+    {
+        <p class="hint" style="margin-top:.5rem">
+            Found <code>@_registryHit.Id</code>: @_registryHit.DisplayName, @_registryHit.DeploymentPath.
+        </p>
+    }
+    else if (_registryMissed)
+    {
+        <p class="hint" style="margin-top:.5rem">No device is registered under that MAC. The miss has been counted.</p>
+    }
+</section>
+
+@* ------------------------------------------------------------ timeline *@
+<section class="panel inspector">
+    <div class="panel-head">
+        <h2>Sensor timeline</h2>
+        <span class="count">SortedDictionary&lt;DateTimeOffset, reading&gt; &middot; ordered by timestamp</span>
+    </div>
+
+    <p>
+        A mesh relays packets over several hops, so they do not always arrive in the order they were
+        sent. Each sensor's log is kept sorted by the time a reading was taken, so a late packet is
+        slotted into its place rather than tacked on the end. Send some out of order to see it.
+    </p>
+
+    <div class="form-grid">
+        <div class="field">
+            <label for="timeline-sensor">Sensor</label>
+            <select id="timeline-sensor" value="@_timelineSensor" @onchange="OnTimelineSensorChanged">
+                @foreach (var sensor in _snapshots)
+                {
+                    <option value="@sensor.Id">@sensor.DisplayName</option>
+                }
+            </select>
+        </div>
+    </div>
+
+    <div class="actions">
+        <button @onclick="ScrambleAsync" disabled="@(_timelineSensor.Length == 0)">Send 8 packets out of order</button>
+    </div>
+
+    <TimelineGraph Points="_timeline" Label="@($"{SensorName(_timelineSensor)} readings over time")" />
+
+    @if (_timeline.Count > 0)
+    {
+        var late = TimelineGraph.LateFlags(_timeline);
+
+        <p class="hint" style="margin-top:.6rem">
+            @late.Count(l => l) of the @_timeline.Count readings shown arrived late. They are marked
+            on the graph and highlighted below, each in its place in time.
+        </p>
+
+        <h3>Readings, newest first</h3>
+        <div class="scroll-x" style="max-height:20rem;overflow-y:auto">
+            <table class="context-table">
+                <thead>
+                    <tr><th>taken at</th><th>value</th><th>arrived</th><th></th></tr>
+                </thead>
+                <tbody>
+                    @for (var i = _timeline.Count - 1; i >= 0; i--)
+                    {
+                        <tr class="@(late[i] ? "offending" : "")">
+                            <td>@_timeline[i].At.ToLocalTime().ToString("HH:mm:ss.fff")</td>
+                            <td>@_timeline[i].Value.ToString("0.##")</td>
+                            <td>#@_timeline[i].Sequence</td>
+                            <td>@(late[i] ? "late" : "")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</section>
+
+@* ------------------------------------------------------------ disconnect set *@
+<section class="panel inspector">
+    <div class="panel-head">
+        <h2>Disconnect set</h2>
+        <span class="count">HashSet&lt;string&gt; &middot; Add returns false for a duplicate</span>
+    </div>
+
+    <p>
+        A node that stays silent fails the silence check every few seconds, and each failure would
+        be another alert. The gateway keeps the silent nodes in a hash set: a node is added when it
+        is first found silent, and a repeat finding is recognised as a duplicate and skipped. Open
+        spikes and threshold breaches are tracked the same way. Unplug a node and watch the rail.
+    </p>
+
+    @if (_faults is not null)
+    {
+        <div class="stats">
+            <div class="stat">
+                <div class="label">Disconnected nodes</div>
+                <div class="value @(_faults.Disconnected.Count > 0 ? "warn" : "ok")">@_faults.Disconnected.Count</div>
+            </div>
+            <div class="stat">
+                <div class="label">Open error states</div>
+                <div class="value @(_faults.ActiveErrors.Count > 0 ? "warn" : "ok")">@_faults.ActiveErrors.Count</div>
+            </div>
+            <div class="stat">
+                <div class="label">Duplicate alerts skipped</div>
+                <div class="value">@_faults.DuplicatesSkipped.ToString("N0")</div>
+            </div>
+        </div>
+    }
+
+    <div class="form-grid" style="margin-top:.8rem">
+        <div class="field">
+            <label for="unplug-sensor">Node</label>
+            <select id="unplug-sensor" value="@_unplugSensor" @onchange="e => _unplugSensor = e.Value?.ToString() ?? string.Empty">
+                @foreach (var sensor in _snapshots)
+                {
+                    <option value="@sensor.Id">@sensor.DisplayName</option>
+                }
+            </select>
+        </div>
+    </div>
+
+    <div class="actions">
+        <button class="danger" @onclick="() => UnplugAsync(60)" disabled="@(_unplugSensor.Length == 0)">Unplug for 60 s</button>
+        <button @onclick="() => UnplugAsync(0)" disabled="@(_unplugSensor.Length == 0)">Plug back in</button>
+    </div>
+    <p class="hint" style="margin-top:.4rem">
+        The node is found silent after three missed publish intervals, checked every five seconds.
+    </p>
+
+    @if (_faults is not null)
+    {
+        <div class="split">
+            <div>
+                <h3>In the disconnect set</h3>
+                @if (_faults.Disconnected.Count == 0)
+                {
+                    <p class="hint">Empty. Every node is reporting.</p>
+                }
+                else
+                {
+                    <ul class="list">
+                        @foreach (var id in _faults.Disconnected)
+                        {
+                            <li>
+                                <span class="tag warn">Silence</span>
+                                <span class="grow">@SensorName(id)</span>
+                                <span class="meta">@_active.Concat(_suppressed).Count(a => a.SensorId == id && a.Kind == AlertKind.Silence) alert(s)</span>
+                            </li>
+                        }
+                    </ul>
+                }
+            </div>
+
+            <div>
+                <h3>Open error states</h3>
+                @if (_faults.ActiveErrors.Count == 0)
+                {
+                    <p class="hint">Empty. No spike or threshold breach is in progress.</p>
+                }
+                else
+                {
+                    <ul class="list">
+                        @foreach (var key in _faults.ActiveErrors)
+                        {
+                            var parts = key.Split('|');
+
+                            <li>
+                                <span class="tag warn">@parts[^1]</span>
+                                <span class="grow">@SensorName(parts[0])</span>
+                            </li>
+                        }
+                    </ul>
+                }
+            </div>
+        </div>
+    }
+</section>
+
 @* ------------------------------------------------------------ manual override commands *@
 <section class="panel inspector">
     <div class="panel-head">
@@ -462,6 +679,17 @@
     private CommandLog? _commands;
     private List<SensorSnapshot> _actuators = [];
 
+    private RegistryStatus? _registry;
+    private string _registryKey = string.Empty;
+    private SensorSnapshot? _registryHit;
+    private bool _registryMissed;
+
+    private string _timelineSensor = string.Empty;
+    private IReadOnlyList<TimelinePoint> _timeline = [];
+
+    private FaultState? _faults;
+    private string _unplugSensor = string.Empty;
+
     private QueueStatus? _queue;
     private QueueEntry? _lastCritical;
     private int _overtaken;   // packets that arrived before _lastCritical but were processed after it
@@ -476,6 +704,9 @@
         SortAlerts(await Gateway.GetAlertsAsync());
         await RefreshQueueAsync();
         await RefreshCommandsAsync();
+        await RefreshRegistryAsync();
+        await RefreshTimelineAsync();
+        await RefreshFaultsAsync();
 
         _hub = new HubConnectionBuilder()
             .WithUrl(new Uri(Gateway.BaseAddress, "hubs/telemetry"))
@@ -496,12 +727,19 @@
             // The queue has no push event of its own; the once-a-second tick is the cue to re-read it.
             await RefreshQueueAsync();
             await RefreshCommandsAsync();
+            await RefreshRegistryAsync();
+            await RefreshTimelineAsync();
+            await RefreshFaultsAsync();
 
             await InvokeAsync(StateHasChanged);
         });
 
         _hub.On<Alert>(HubEvents.AlertRaised, async alert =>
         {
+            // A long outage re-sends its one alert at a higher severity: replace, never duplicate.
+            _active.RemoveAll(a => a.Id == alert.Id);
+            _suppressed.RemoveAll(a => a.Id == alert.Id);
+
             if (alert.Suppressed) _suppressed.Insert(0, alert);
             else _active.Insert(0, alert);
 
@@ -609,6 +847,50 @@
 
     private async Task AggregateAsync()
         => _aggregate = await Gateway.AggregateAsync(_aggregateA, _aggregateB);
+
+    private async Task RefreshRegistryAsync() => _registry = await Gateway.GetRegistryAsync() ?? _registry;
+
+    private async Task LookupAsync()
+    {
+        _registryHit = await Gateway.FindSensorAsync(_registryKey.Trim());
+        _registryMissed = _registryHit is null;
+        await RefreshRegistryAsync();
+    }
+
+    private async Task RefreshTimelineAsync()
+    {
+        // Until one is picked, or if the picked one is deleted, show a node with a level to
+        // plot (an actuator's on/off trace says little), else whatever is registered.
+        if (!_snapshots.Any(s => s.Id == _timelineSensor))
+            _timelineSensor = (_snapshots.FirstOrDefault(s => s.Payload != PayloadKind.Boolean) ?? _snapshots.FirstOrDefault())?.Id ?? string.Empty;
+        if (_timelineSensor.Length == 0) return;
+
+        _timeline = await Gateway.GetTimelineAsync(_timelineSensor) ?? _timeline;
+    }
+
+    private async Task OnTimelineSensorChanged(ChangeEventArgs args)
+    {
+        _timelineSensor = args.Value?.ToString() ?? string.Empty;
+        await RefreshTimelineAsync();
+    }
+
+    private async Task ScrambleAsync()
+    {
+        await Gateway.ScrambleTimelineAsync(_timelineSensor);
+        await RefreshTimelineAsync();
+    }
+
+    private async Task RefreshFaultsAsync()
+    {
+        _faults = await Gateway.GetFaultsAsync() ?? _faults;
+        if (!_snapshots.Any(s => s.Id == _unplugSensor)) _unplugSensor = _snapshots.FirstOrDefault()?.Id ?? string.Empty;
+    }
+
+    private async Task UnplugAsync(int seconds)
+    {
+        await Gateway.UnplugAsync(_unplugSensor, seconds);
+        await RefreshFaultsAsync();
+    }
 
     private async Task RefreshCommandsAsync() => _commands = await Gateway.GetCommandsAsync() ?? _commands;
 

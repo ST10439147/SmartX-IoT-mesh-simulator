@@ -22,6 +22,12 @@ namespace SmartX.Api.Services;
 /// <see cref="SuppressAfterDismissals"/> times keeps firing but arrives flagged, so the
 /// rail collapses it into an auditable group instead of discarding it. Hiding a genuine
 /// fault is the failure mode this design has to avoid.</para>
+///
+/// <para>One fault, one alert. A node that stays silent is found silent again on every
+/// sweep, and a reading that stays over its threshold is over it again on every packet.
+/// Two <see cref="HashSet{T}"/>s remember what is already known - the disconnected nodes
+/// and the open error states - and <c>Add</c> returning false is the signal that this
+/// alert has been raised before and is skipped.</para>
 /// </summary>
 // Reference [35]: The Independent Institute of Education (2026). PROG7312 Portfolio of Evidence Guide, Part 1. The IIE.
 public sealed class AnomalyEngine(TelemetryStore store, ILogger<AnomalyEngine> logger)
@@ -47,6 +53,57 @@ public sealed class AnomalyEngine(TelemetryStore store, ILogger<AnomalyEngine> l
     private readonly ConcurrentDictionary<string, Alert> _alerts = new();
     private readonly ConcurrentDictionary<string, int> _dismissals = new();
     private readonly ConcurrentDictionary<string, DateTimeOffset> _lastRaised = new();
+
+    // Each set answers one yes/no question - "is this node already known to be down?",
+    // "is this fault already open?" - and a hash set answers it in O(1) with no value to
+    // store. _disconnected holds sensor ids; _activeErrors holds "sensorId|Kind".
+    // HashSet is not thread-safe and the worker, the sweep and requests all touch these,
+    // so every access goes through the lock.
+    // Reference: Microsoft. HashSet<T> Class. Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/api/system.collections.generic.hashset-1
+    private readonly HashSet<string> _disconnected = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _activeErrors = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Lock _gate = new();
+    private long _duplicatesSkipped;
+
+    /// <summary>Nodes currently past their silence limit.</summary>
+    public IReadOnlyList<string> Disconnected
+    {
+        get { lock (_gate) return _disconnected.Order().ToList(); }
+    }
+
+    /// <summary>Spikes and threshold breaches that are still going on, as <c>sensorId|Kind</c>.</summary>
+    public IReadOnlyList<string> ActiveErrors
+    {
+        get { lock (_gate) return _activeErrors.Order().ToList(); }
+    }
+
+    /// <summary>Alerts not raised because the fault they describe was already in a set.</summary>
+    public long DuplicatesSkipped
+    {
+        get { lock (_gate) return _duplicatesSkipped; }
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    /// <summary>
+    /// True the first time a fault is seen, false for as long as it stays open.
+    /// <see cref="HashSet{T}.Add"/> does the test and the insert in one step.
+    /// </summary>
+    private bool Open(HashSet<string> set, string key)
+    {
+        lock (_gate)
+        {
+            if (set.Add(key)) return true;
+
+            _duplicatesSkipped++;
+            return false;
+        }
+    }
+
+    /// <summary>The fault has passed, so the next occurrence is a new one.</summary>
+    private void Close(HashSet<string> set, string key)
+    {
+        lock (_gate) set.Remove(key);
+    }
     //----------------------------------------------------------------------------------------------------------------------//
     /// <summary>Evaluates one node against its own history. Returns an alert only if something changed.</summary>
     // Reference [19]: Wikipedia. Standard score (z-score).
@@ -81,8 +138,16 @@ public sealed class AnomalyEngine(TelemetryStore store, ILogger<AnomalyEngine> l
         var history = window.Take(window.Count - 1).ToArray();
         var (mean, z) = ZScore(history, observed);
 
+        var spikeKey = $"{sensor.Id}|{AlertKind.Spike}";
+        var breachKey = $"{sensor.Id}|{AlertKind.ThresholdBreach}";
+
+        if (z < SpikeZScore) Close(_activeErrors, spikeKey);
+        if (observed <= sensor.WarningThreshold) Close(_activeErrors, breachKey);
+
         if (z >= SpikeZScore)
         {
+            if (!Open(_activeErrors, spikeKey)) return null;
+
             return Raise(
                 sensor,
                 AlertKind.Spike,
@@ -94,6 +159,8 @@ public sealed class AnomalyEngine(TelemetryStore store, ILogger<AnomalyEngine> l
 
         if (sensor.Payload != PayloadKind.Boolean && observed > sensor.WarningThreshold)
         {
+            if (!Open(_activeErrors, breachKey)) return null;
+
             return Raise(
                 sensor,
                 AlertKind.ThresholdBreach,
@@ -137,28 +204,70 @@ public sealed class AnomalyEngine(TelemetryStore store, ILogger<AnomalyEngine> l
     /// <summary>
     /// Silence sweep. A node is considered lost once it has missed three publish
     /// intervals - one missed interval is jitter, three is a disconnect.
+    ///
+    /// <para>The sweep runs every few seconds and a dead node fails it every time. The
+    /// disconnect set is what turns that into a single alert: the node goes in when it
+    /// is first found silent and comes out when it is heard from again. The one thing a
+    /// repeat sweep may still do is escalate that same alert from warning to critical.</para>
     /// </summary>
-    public IReadOnlyList<Alert> SweepForSilence()
+    /// <param name="at">The time to sweep as of. Defaults to now; the self-check passes its own.</param>
+    public IReadOnlyList<Alert> SweepForSilence(DateTimeOffset? at = null)
     {
         var raised = new List<Alert>();
-        var now = DateTimeOffset.UtcNow;
+        var now = at ?? DateTimeOffset.UtcNow;
+        var sensors = store.Sensors;
 
-        foreach (var sensor in store.Sensors)
+        // A deleted node can never reconnect or recover, so nothing else would take it out.
+        var registered = sensors.Select(s => s.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        lock (_gate)
+        {
+            _disconnected.IntersectWith(registered);
+            _activeErrors.RemoveWhere(key => !registered.Contains(key[..key.IndexOf('|')]));
+        }
+
+        foreach (var sensor in sensors)
         {
             var lastSeen = store.LastSeen(sensor.Id);
             if (lastSeen is null) continue;
 
             var quietFor = now - lastSeen.Value;
             var allowed = TimeSpan.FromSeconds(sensor.PublishIntervalSeconds * 3);
-            if (quietFor <= allowed) continue;
 
+            if (quietFor <= allowed)
+            {
+                Close(_disconnected, sensor.Id);
+                continue;
+            }
+
+            var severity = quietFor > allowed * 3 ? AlertSeverity.Critical : AlertSeverity.Warning;
+            var message = $"Node has been silent for {quietFor.TotalSeconds:0}s. Expected a packet every {sensor.PublishIntervalSeconds}s.";
+
+            // Already in the set: this outage has its alert. Do not raise another.
+            if (!Open(_disconnected, sensor.Id))
+            {
+                var open = _alerts.Values.FirstOrDefault(a =>
+                    a.SensorId == sensor.Id && a.Kind == AlertKind.Silence && a.Severity < severity);
+
+                if (open is not null)
+                {
+                    var escalated = open with { Severity = severity, Message = message, Observed = quietFor.TotalSeconds };
+                    _alerts[open.Id] = escalated;
+                    raised.Add(escalated);
+                }
+
+                continue;
+            }
+
+            // The set already guarantees one alert per outage, so no debounce: a node
+            // that drops, returns and drops again inside the window is two outages.
             var alert = Raise(
                 sensor,
                 AlertKind.Silence,
-                quietFor > allowed * 3 ? AlertSeverity.Critical : AlertSeverity.Warning,
+                severity,
                 $"no packet for more than 3 x {sensor.PublishIntervalSeconds}s publish interval",
-                $"Node has been silent for {quietFor.TotalSeconds:0}s. Expected a packet every {sensor.PublishIntervalSeconds}s.",
-                sensor.PublishIntervalSeconds, quietFor.TotalSeconds, quietFor.TotalSeconds - allowed.TotalSeconds);
+                message,
+                sensor.PublishIntervalSeconds, quietFor.TotalSeconds, quietFor.TotalSeconds - allowed.TotalSeconds,
+                debounce: false);
 
             if (alert is not null) raised.Add(alert);
         }
@@ -174,12 +283,13 @@ public sealed class AnomalyEngine(TelemetryStore store, ILogger<AnomalyEngine> l
         string message,
         double baseline,
         double observed,
-        double deviation)
+        double deviation,
+        bool debounce = true)
     {
         var key = $"{sensor.Id}|{kind}";
 
-        // Debounce: a sustained fault is one entry on the rail, not one per packet.
-        if (_lastRaised.TryGetValue(key, out var last) && DateTimeOffset.UtcNow - last < Debounce)
+        // Debounce: a reading that flaps across a limit is one entry on the rail, not one per crossing.
+        if (debounce && _lastRaised.TryGetValue(key, out var last) && DateTimeOffset.UtcNow - last < Debounce)
             return null;
 
         _lastRaised[key] = DateTimeOffset.UtcNow;
@@ -253,7 +363,16 @@ public sealed class AnomalyEngine(TelemetryStore store, ILogger<AnomalyEngine> l
         }
     }
     //----------------------------------------------------------------------------------------------------------------------//
-    public void Clear() => _alerts.Clear();
+    public void Clear()
+    {
+        _alerts.Clear();
+
+        lock (_gate)
+        {
+            _disconnected.Clear();
+            _activeErrors.Clear();
+        }
+    }
 
     private void Evict()
     {

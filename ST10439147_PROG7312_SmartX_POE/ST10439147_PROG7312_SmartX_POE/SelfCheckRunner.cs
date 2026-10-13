@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using Microsoft.Extensions.Logging.Abstractions;
 using SmartX.Api.Security;
 using SmartX.Api.Services;
 using SmartX.Shared.Diagnostics;
@@ -32,6 +33,15 @@ internal static class SelfCheckRunner
                 Console.WriteLine($"  ok  {line}");
 
             foreach (var line in RunCommandChecks())
+                Console.WriteLine($"  ok  {line}");
+
+            foreach (var line in RunRegistryChecks())
+                Console.WriteLine($"  ok  {line}");
+
+            foreach (var line in RunTimelineChecks())
+                Console.WriteLine($"  ok  {line}");
+
+            foreach (var line in RunDisconnectChecks())
                 Console.WriteLine($"  ok  {line}");
         }
         catch (Exception ex)
@@ -192,6 +202,146 @@ internal static class SelfCheckRunner
         Assert(!commands.TryUndo(out _) && commands.History.Count == 0, "the stack is empty again");
 
         log.Add("stack: commands undo last-in-first-out, a batch reverts as one, empty undo is safe");
+        return log;
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    private static IEnumerable<string> RunRegistryChecks()
+    {
+        var log = new List<string>();
+        var store = new TelemetryStore();
+
+        var valve = store.Register(new SensorRegistration
+        {
+            MacAddress = "dc-a6-32-77-11-01",
+            DisplayName = "Drip Line Valve A",
+            DeploymentPath = "Facility A/Zone 1/Sub-Zone A",
+            Category = SensorCategory.IrrigationValve
+        });
+
+        // One device, however the MAC is spelled: the id the gateway issued, the MAC as
+        // it was typed, and a lower-case colon form all land on the same entry.
+        Assert(valve.Id == "DC:A6:32:77:11:01", "the registry key is the MAC with colons, upper case");
+        Assert(store.TryGet(valve.Id, out var byId) && ReferenceEquals(byId, valve), "lookup by id should find the device");
+        Assert(store.TryGet("dc-a6-32-77-11-01", out var byMac) && ReferenceEquals(byMac, valve), "lookup by the MAC as typed should find the same device");
+        Assert(store.TryGet("dc:a6:32:77:11:01", out _), "lookup must not care about case");
+        Assert(!store.TryGet("00:00:00:00:00:00", out _), "an unregistered MAC is a miss, not an exception");
+        Assert(store.Lookups == 4 && store.Misses == 1, $"expected 4 lookups and 1 miss, counted {store.Lookups} and {store.Misses}");
+
+        Assert(store.Remove("dc-a6-32-77-11-01") && !store.Exists(valve.Id), "removing by MAC should remove the device");
+
+        log.Add("dictionary: a device is found by id or by MAC in any spelling, misses are counted");
+        return log;
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    private static IEnumerable<string> RunTimelineChecks()
+    {
+        var log = new List<string>();
+        var store = new TelemetryStore();
+
+        var probe = store.Register(new SensorRegistration
+        {
+            MacAddress = "A4:CF:12:9B:04:7E",
+            DisplayName = "Soil Moisture North",
+            DeploymentPath = "Facility A/Zone 1/Sub-Zone A",
+            Category = SensorCategory.SoilMoisture
+        });
+
+        // Readings taken at seconds 1..4 arrive in the order 3, 1, 4, 2. The value is the
+        // second it was taken at, so the expected timeline reads 1, 2, 3, 4.
+        var start = DateTimeOffset.UtcNow.AddMinutes(-30);
+        int[] arrivals = [3, 1, 4, 2];
+        for (var i = 0; i < arrivals.Length; i++)
+            store.LogReading(probe.Id, start.AddSeconds(arrivals[i]), arrivals[i], sequence: i + 1);
+
+        var timeline = store.Timeline(probe.Id, 10);
+        Assert(timeline.Select(p => p.Value).SequenceEqual([1, 2, 3, 4]),
+            $"out-of-order packets should read back in time order but got {string.Join(",", timeline.Select(p => p.Value))}");
+        Assert(timeline.Select(p => p.Sequence).SequenceEqual([2, 4, 1, 3]), "each point should still say when it arrived");
+        Assert(store.Timeline(probe.Id, 2).Select(p => p.Value).SequenceEqual([3, 4]), "asking for 2 samples should return the newest 2");
+
+        // Bounded: flood it past capacity and only the newest readings are left.
+        for (var i = 0; i < TelemetryStore.TimelineCapacity + 10; i++)
+            store.LogReading(probe.Id, start.AddSeconds(100 + i), i, sequence: 100 + i);
+
+        var full = store.Timeline(probe.Id, int.MaxValue);
+        Assert(full.Count == TelemetryStore.TimelineCapacity, $"the timeline should stop at {TelemetryStore.TimelineCapacity} readings, holds {full.Count}");
+        Assert(full[0].At == start.AddSeconds(110), "the oldest readings should be the ones dropped");
+
+        // A late packet lands in the past; it must not make the node look older than it is.
+        store.Ingest(new TelemetryPacket<float>(probe.Id, 31f, probe.Category, start.AddMinutes(5)));
+        store.Ingest(new TelemetryPacket<float>(probe.Id, 31f, probe.Category, start));
+        Assert(store.LastSeen(probe.Id) == start.AddMinutes(5), "a late packet must not move last-seen backwards");
+
+        log.Add("sorted dictionary: out-of-order packets read back in time order, the log stays bounded");
+        return log;
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    private static IEnumerable<string> RunDisconnectChecks()
+    {
+        var log = new List<string>();
+        var store = new TelemetryStore();
+        var engine = new AnomalyEngine(store, NullLogger<AnomalyEngine>.Instance);
+
+        var probe = store.Register(new SensorRegistration
+        {
+            MacAddress = "A4:CF:12:9B:04:7E",
+            DisplayName = "Soil Moisture North",
+            DeploymentPath = "Facility A/Zone 1/Sub-Zone A",
+            Category = SensorCategory.SoilMoisture,
+            PublishIntervalSeconds = 2,
+            WarningThreshold = 45
+        });
+
+        // One packet, then nothing. With a 2s interval the node is silent after 6s and
+        // critical after 18s.
+        var lastHeard = DateTimeOffset.UtcNow;
+        store.Ingest(new TelemetryPacket<float>(probe.Id, 31f, probe.Category, lastHeard));
+
+        Assert(engine.SweepForSilence(lastHeard.AddSeconds(5)).Count == 0, "inside three publish intervals a node is not silent yet");
+
+        var first = engine.SweepForSilence(lastHeard.AddSeconds(8));
+        Assert(first.Count == 1 && first[0].Kind == AlertKind.Silence && first[0].Severity == AlertSeverity.Warning,
+            "the first sweep past the limit should raise one warning");
+
+        // The node stays silent. Every sweep finds it again; none may raise again.
+        for (var seconds = 10; seconds <= 16; seconds += 2)
+            Assert(engine.SweepForSilence(lastHeard.AddSeconds(seconds)).Count == 0, "a node that stays silent must not be alerted on again");
+
+        Assert(engine.DuplicatesSkipped == 4, $"four repeat sweeps should have been skipped as duplicates, counted {engine.DuplicatesSkipped}");
+        Assert(engine.Disconnected.SequenceEqual([probe.Id]), "the silent node should be in the disconnect set");
+
+        // Much later it is the same outage: the one alert escalates, no second one appears.
+        var later = engine.SweepForSilence(lastHeard.AddMinutes(5));
+        Assert(later.Count == 1 && later[0].Id == first[0].Id && later[0].Severity == AlertSeverity.Critical,
+            "a long outage should escalate the alert it already has");
+        Assert(engine.Ranked().Count(a => a.Kind == AlertKind.Silence) == 1, "a silent node has exactly one disconnect alert");
+
+        // Heard from again: out of the set, so a later outage would be a new alert.
+        var back = lastHeard.AddMinutes(6);
+        store.Ingest(new TelemetryPacket<float>(probe.Id, 31f, probe.Category, back));
+        Assert(engine.SweepForSilence(back.AddSeconds(1)).Count == 0 && engine.Disconnected.Count == 0,
+            "a node that reports again should leave the disconnect set");
+
+        // Active error states. A baseline swinging between 30 and 44 keeps 46 inside three
+        // sigma, so it is a threshold breach (over 45) and not a spike.
+        var breachKey = $"{probe.Id}|{AlertKind.ThresholdBreach}";
+        Alert? Send(float value)
+        {
+            store.Ingest(new TelemetryPacket<float>(probe.Id, value, probe.Category, back));
+            return engine.Evaluate(probe);
+        }
+
+        for (var i = 0; i < 24; i++) Assert(Send(i % 2 == 0 ? 30f : 44f) is null, "readings under the threshold are not alerts");
+
+        var skippedBefore = engine.DuplicatesSkipped;
+        Assert(Send(46f) is { Kind: AlertKind.ThresholdBreach }, "the first reading over the threshold should raise a breach");
+        Assert(Send(46f) is null && Send(46f) is null, "a breach that is still going on must not be raised again");
+        Assert(engine.DuplicatesSkipped == skippedBefore + 2 && engine.ActiveErrors.Contains(breachKey),
+            "the two repeats should be skipped as duplicates while the breach is open");
+
+        Assert(Send(40f) is null && !engine.ActiveErrors.Contains(breachKey), "back under the threshold, the error state is cleared");
+
+        log.Add("hash set: a silent node raises one disconnect alert, an open error state is not raised twice");
         return log;
     }
     //----------------------------------------------------------------------------------------------------------------------//

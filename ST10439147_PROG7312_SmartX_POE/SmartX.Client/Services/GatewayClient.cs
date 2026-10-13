@@ -137,6 +137,69 @@ public sealed class GatewayClient(HttpClient http)
     public async Task<StressResult?> StressTopologyAsync(int depth, CancellationToken ct = default)
         => await http.GetFromJsonAsync<StressResult>($"api/topology/stress?depth={depth}", SmartXJson.Options, ct);
 
+    // ---- device registry ---------------------------------------------------
+
+    /// <summary>Registry size and lookup counters. Null if the gateway could not be reached.</summary>
+    public async Task<RegistryStatus?> GetRegistryAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            return await http.GetFromJsonAsync<RegistryStatus>("api/registry", SmartXJson.Options, ct);
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Looks one device up by MAC or id, in whatever spelling it was typed. Null when there is no such device.</summary>
+    public async Task<SensorSnapshot?> FindSensorAsync(string macOrId, CancellationToken ct = default)
+    {
+        var response = await http.GetAsync($"api/sensors/{Uri.EscapeDataString(macOrId)}", ct);
+        return response.IsSuccessStatusCode
+            ? await response.Content.ReadFromJsonAsync<SensorSnapshot>(SmartXJson.Options, ct)
+            : null;
+    }
+
+    // ---- timeline ----------------------------------------------------------
+
+    /// <summary>One sensor's readings in timestamp order, oldest first. Null if the gateway could not be reached or the sensor is gone.</summary>
+    public async Task<List<TimelinePoint>?> GetTimelineAsync(string sensorId, int samples = 60, CancellationToken ct = default)
+    {
+        try
+        {
+            return await http.GetFromJsonAsync<List<TimelinePoint>>(
+                $"api/sensors/{Uri.EscapeDataString(sensorId)}/timeline?samples={samples}", SmartXJson.Options, ct);
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Test trigger: has the gateway receive a few backdated readings for this sensor in shuffled order.</summary>
+    public async Task ScrambleTimelineAsync(string sensorId, CancellationToken ct = default)
+        => await http.PostAsync($"api/sensors/{Uri.EscapeDataString(sensorId)}/timeline/scramble", null, ct);
+
+    // ---- disconnect set ----------------------------------------------------
+
+    /// <summary>The disconnected nodes and open error states. Null if the gateway could not be reached.</summary>
+    public async Task<FaultState?> GetFaultsAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            return await http.GetFromJsonAsync<FaultState>("api/faults", SmartXJson.Options, ct);
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Test trigger: the simulated node stops publishing for this long. Zero plugs it back in.</summary>
+    public async Task UnplugAsync(string sensorId, int seconds, CancellationToken ct = default)
+        => await http.PostAsync($"api/sensors/{Uri.EscapeDataString(sensorId)}/unplug?seconds={seconds}", null, ct);
+
     // ---- manual override commands ------------------------------------------
 
     /// <summary>Undo history (newest first) and current overrides. Null if the gateway could not be reached.</summary>
@@ -206,6 +269,12 @@ public sealed record AggregateResult(
     AggregateValue Delta,
     bool LeftDrawsMore,
     bool Equal);
+//----------------------------------------------------------------------------------------------------------------------//
+/// <summary>Shape of <c>GET /api/registry</c>.</summary>
+public sealed record RegistryStatus(int Devices, long Lookups, long Misses, List<string> Keys);
+//----------------------------------------------------------------------------------------------------------------------//
+/// <summary>Shape of <c>GET /api/faults</c>. Active errors are <c>sensorId|Kind</c>.</summary>
+public sealed record FaultState(List<string> Disconnected, List<string> ActiveErrors, long DuplicatesSkipped);
 //----------------------------------------------------------------------------------------------------------------------//
 /// <summary>Shape of <c>GET /api/commands</c>. History is the undo stack, top first.</summary>
 public sealed record CommandLog(List<CommandEntry> History, Dictionary<string, bool> Overrides);

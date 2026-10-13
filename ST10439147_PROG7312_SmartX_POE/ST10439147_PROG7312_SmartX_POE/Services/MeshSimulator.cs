@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.SignalR;
@@ -37,6 +38,16 @@ public sealed class MeshSimulator(
     private readonly Random _random = new(7312);
 
     private readonly Dictionary<string, NodeState> _state = new(StringComparer.OrdinalIgnoreCase);
+
+    // Nodes an operator has unplugged, and until when. Written from a request thread and
+    // read from the publish loop, hence concurrent.
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _unplugged = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Test trigger: the node stops publishing for <paramref name="duration"/>, as if its
+    /// power had been pulled. A zero duration plugs it straight back in.
+    /// </summary>
+    public void Unplug(string sensorId, TimeSpan duration) => _unplugged[sensorId] = DateTimeOffset.UtcNow + duration;
     //----------------------------------------------------------------------------------------------------------------------//
 
     // Reference [22]: Microsoft. Introduction to ASP.NET Core SignalR. Microsoft Learn.
@@ -62,11 +73,11 @@ public sealed class MeshSimulator(
             .First();
         _http.BaseAddress = new Uri($"{bound.Scheme}://localhost:{bound.Port}");
 
-        // ponytail: warmup reuses the live publish path, so backfilled packets are all
-        // stamped at boot time. Sparklines plot by index so that is invisible there;
-        // /history shows a compressed leading segment. Thread backdated timestamps
-        // through PublishCycle if that ever matters.
-        for (var warm = 1; warm <= WarmupTicks; warm++) await PublishCycle(warm, stoppingToken);
+        // Warmup reuses the live publish path, with each tick backdated to the second it
+        // stands for, so the history reads as the last four minutes rather than one instant.
+        var bootedAt = DateTimeOffset.UtcNow;
+        for (var warm = 1; warm <= WarmupTicks; warm++)
+            await PublishCycle(warm, stoppingToken, bootedAt.AddSeconds(warm - WarmupTicks));
 
         // Drop faults the accelerated warmup happened to inject so the dashboard opens
         // on a healthy mesh; real spikes and disconnects accumulate from here.
@@ -124,7 +135,7 @@ public sealed class MeshSimulator(
         }
     }
     //----------------------------------------------------------------------------------------------------------------------//
-    private async Task PublishCycle(int elapsed, CancellationToken token)
+    private async Task PublishCycle(int elapsed, CancellationToken token, DateTimeOffset? at = null)
     {
         foreach (var sensor in store.Sensors)
         {
@@ -139,6 +150,8 @@ public sealed class MeshSimulator(
             }
 
             if (elapsed % sensor.PublishIntervalSeconds != 0) continue;
+
+            if (_unplugged.TryGetValue(sensor.Id, out var until) && until > DateTimeOffset.UtcNow) continue;
 
             // --- disconnect injection: mute a node for a stretch so the silence timer
             // has something real to catch.
@@ -159,7 +172,7 @@ public sealed class MeshSimulator(
                 case PayloadKind.Float:
                 {
                     var value = node.NextFloat(_random, spiking);
-                    await Post(sensor.Id, value, token);
+                    await Post(sensor.Id, value, at, token);
 
                     // A poll cycle returns however many samples the mesh delivered - the
                     // ragged rows the jagged archive exists for.
@@ -172,7 +185,7 @@ public sealed class MeshSimulator(
                 case PayloadKind.Integer:
                 {
                     var value = (int)Math.Round(node.NextFloat(_random, spiking));
-                    await Post(sensor.Id, value, token);
+                    await Post(sensor.Id, value, at, token);
                     break;
                 }
 
@@ -183,7 +196,7 @@ public sealed class MeshSimulator(
                     // event worth seeing.
                     if (commands.TryGetOverride(sensor.Id, out var forced)) node.Flag = forced;
                     else if (_random.NextDouble() < 0.08) node.Flag = !node.Flag;
-                    await Post(sensor.Id, node.Flag, token);
+                    await Post(sensor.Id, node.Flag, at, token);
                     break;
                 }
             }
@@ -191,9 +204,10 @@ public sealed class MeshSimulator(
     }
     //----------------------------------------------------------------------------------------------------------------------//
     // The gateway evaluates anomalies as it ingests, so that no longer happens here.
-    private async Task Post<T>(string sensorId, T value, CancellationToken token)
+    // A null timestamp leaves the gateway to stamp the packet on arrival.
+    private async Task Post<T>(string sensorId, T value, DateTimeOffset? timestamp, CancellationToken token)
     {
-        using var response = await _http.PostAsJsonAsync("api/telemetry", new { sensorId, value }, token);
+        using var response = await _http.PostAsJsonAsync("api/telemetry", new { sensorId, value, timestamp }, token);
 
         // A node deleted mid-cycle answers 404; that is not worth losing the rest of the tick over.
         if (!response.IsSuccessStatusCode)
