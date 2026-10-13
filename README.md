@@ -217,7 +217,8 @@ backlog delays live readings enough to raise false "silent node" alerts.
 
 ### Stack: manual override commands and Undo
 
-A manual override pins an actuator (valve or vent) on or off. Each command is pushed onto
+A manual override pins an actuator (valve, vent or pump) on or off; a pump pinned off
+reports 0 W until the command is undone. Each command is pushed onto
 a `Stack<T>`; Undo pops the most recent one and puts every device it touched back the way
 it was.
 

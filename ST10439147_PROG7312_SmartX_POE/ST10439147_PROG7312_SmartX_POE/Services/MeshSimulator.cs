@@ -185,6 +185,10 @@ public sealed class MeshSimulator(
                 case PayloadKind.Integer:
                 {
                     var value = (int)Math.Round(node.NextFloat(_random, spiking));
+
+                    // A pump commanded off draws nothing until the override is undone;
+                    // commanded on, or left alone, it runs at its usual load.
+                    if (commands.TryGetOverride(sensor.Id, out var running) && !running) value = 0;
                     await Post(sensor.Id, value, at, token);
                     break;
                 }
