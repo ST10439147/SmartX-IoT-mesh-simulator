@@ -137,6 +137,32 @@ public sealed class GatewayClient(HttpClient http)
     public async Task<StressResult?> StressTopologyAsync(int depth, CancellationToken ct = default)
         => await http.GetFromJsonAsync<StressResult>($"api/topology/stress?depth={depth}", SmartXJson.Options, ct);
 
+    // ---- manual override commands ------------------------------------------
+
+    /// <summary>Undo history (newest first) and current overrides. Null if the gateway could not be reached.</summary>
+    public async Task<CommandLog?> GetCommandsAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            return await http.GetFromJsonAsync<CommandLog>("api/commands", SmartXJson.Options, ct);
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Pins one actuator on or off.</summary>
+    public async Task<bool> CommandDeviceAsync(string sensorId, bool state, CancellationToken ct = default)
+        => (await http.PostAsJsonAsync("api/commands", new { sensorId, state }, SmartXJson.Options, ct)).IsSuccessStatusCode;
+
+    /// <summary>Pins every actuator of one kind on or off as a single, undoable command.</summary>
+    public async Task<bool> CommandCategoryAsync(SensorCategory category, bool state, CancellationToken ct = default)
+        => (await http.PostAsJsonAsync("api/commands", new { category, state }, SmartXJson.Options, ct)).IsSuccessStatusCode;
+
+    public async Task<bool> UndoCommandAsync(CancellationToken ct = default)
+        => (await http.PostAsync("api/commands/undo", null, ct)).IsSuccessStatusCode;
+
     // ---- ingest queue ------------------------------------------------------
 
     /// <summary>Queue depth and processing trail. Null if the gateway could not be reached - the panel just keeps its last view.</summary>
@@ -180,6 +206,13 @@ public sealed record AggregateResult(
     AggregateValue Delta,
     bool LeftDrawsMore,
     bool Equal);
+//----------------------------------------------------------------------------------------------------------------------//
+/// <summary>Shape of <c>GET /api/commands</c>. History is the undo stack, top first.</summary>
+public sealed record CommandLog(List<CommandEntry> History, Dictionary<string, bool> Overrides);
+
+public sealed record CommandEntry(long Id, string Label, DateTimeOffset IssuedAt, List<CommandChange> Changes);
+
+public sealed record CommandChange(string SensorId, bool? Previous, bool Target);
 //----------------------------------------------------------------------------------------------------------------------//
 /// <summary>Shape of <c>GET /api/queue</c>. Position is processing order, Sequence is arrival order.</summary>
 public sealed record QueueStatus(int Depth, int CriticalDepth, long Processed, double ThrottleMs, List<QueueEntry> Recent);

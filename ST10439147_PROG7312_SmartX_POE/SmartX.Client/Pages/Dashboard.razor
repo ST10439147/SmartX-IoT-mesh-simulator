@@ -229,6 +229,76 @@
     </section>
 }
 
+@* ------------------------------------------------------------ manual override commands *@
+<section class="panel inspector">
+    <div class="panel-head">
+        <h2>Manual override</h2>
+        <span class="count">Stack&lt;T&gt; command history &middot; undo is last in, first out</span>
+    </div>
+
+    <p>
+        A command pins an actuator on or off until it is undone. Every command is pushed onto a
+        stack, and Undo pops the most recent one and puts each device back as it was.
+    </p>
+
+    <div class="split">
+        <div>
+            <h3>Actuators</h3>
+            @if (_actuators.Count == 0)
+            {
+                <p class="hint">No valves or vents registered.</p>
+            }
+            else
+            {
+                <ul class="list">
+                    @foreach (var device in _actuators)
+                    {
+                        <li>
+                            <span class="tag @(device.LatestBool ? "ok" : "")">@(device.LatestBool ? "OPEN" : "SHUT")</span>
+                            <span class="grow">@device.DisplayName</span>
+                            <span class="meta">@OverrideLabel(device.Id)</span>
+                            <button class="tiny" @onclick="() => CommandAsync(device, true)">On</button>
+                            <button class="tiny" @onclick="() => CommandAsync(device, false)">Off</button>
+                        </li>
+                    }
+                </ul>
+            }
+
+            <div class="actions">
+                <button class="danger" @onclick="ShutAllValvesAsync"
+                        disabled="@(!_actuators.Any(a => a.Category == SensorCategory.IrrigationValve))">
+                    Shut all valves
+                </button>
+                <button @onclick="UndoAsync" disabled="@(_commands is not { History.Count: > 0 })">Undo last command</button>
+            </div>
+            <p class="hint" style="margin-top:.4rem">A device acts on a command the next time it publishes, so allow a few seconds.</p>
+        </div>
+
+        <div>
+            <h3>Command history, newest first</h3>
+            @if (_commands is not { History.Count: > 0 })
+            {
+                <p class="hint">No commands issued. Nothing to undo.</p>
+            }
+            else
+            {
+                <ul class="list">
+                    @foreach (var command in _commands.History)
+                    {
+                        <li>
+                            <span class="tag @(command == _commands.History[0] ? "warn" : "")">
+                                @(command == _commands.History[0] ? "next undo" : $"#{command.Id}")
+                            </span>
+                            <span class="grow">@command.Label</span>
+                            <span class="meta">@command.Changes.Count device(s) &middot; @Ago(command.IssuedAt)</span>
+                        </li>
+                    }
+                </ul>
+            }
+        </div>
+    </div>
+</section>
+
 @* ------------------------------------------------------------ ingest queue *@
 <section class="panel inspector">
     <div class="panel-head">
@@ -389,6 +459,9 @@
     private string _aggregateB = string.Empty;
     private AggregateResult? _aggregate;
 
+    private CommandLog? _commands;
+    private List<SensorSnapshot> _actuators = [];
+
     private QueueStatus? _queue;
     private QueueEntry? _lastCritical;
     private int _overtaken;   // packets that arrived before _lastCritical but were processed after it
@@ -402,6 +475,7 @@
         RefreshMeters();
         SortAlerts(await Gateway.GetAlertsAsync());
         await RefreshQueueAsync();
+        await RefreshCommandsAsync();
 
         _hub = new HubConnectionBuilder()
             .WithUrl(new Uri(Gateway.BaseAddress, "hubs/telemetry"))
@@ -421,6 +495,7 @@
 
             // The queue has no push event of its own; the once-a-second tick is the cue to re-read it.
             await RefreshQueueAsync();
+            await RefreshCommandsAsync();
 
             await InvokeAsync(StateHasChanged);
         });
@@ -484,6 +559,7 @@
     private void RefreshMeters()
     {
         _meters = _snapshots.Where(s => s.Category == SensorCategory.PumpPower).ToList();
+        _actuators = _snapshots.Where(s => s.Payload == PayloadKind.Boolean).OrderBy(s => s.DisplayName).ToList();
 
         if (_meters.Count >= 2)
         {
@@ -533,6 +609,31 @@
 
     private async Task AggregateAsync()
         => _aggregate = await Gateway.AggregateAsync(_aggregateA, _aggregateB);
+
+    private async Task RefreshCommandsAsync() => _commands = await Gateway.GetCommandsAsync() ?? _commands;
+
+    private async Task CommandAsync(SensorSnapshot device, bool state)
+    {
+        await Gateway.CommandDeviceAsync(device.Id, state);
+        await RefreshCommandsAsync();
+    }
+
+    private async Task ShutAllValvesAsync()
+    {
+        await Gateway.CommandCategoryAsync(SensorCategory.IrrigationValve, false);
+        await RefreshCommandsAsync();
+    }
+
+    private async Task UndoAsync()
+    {
+        await Gateway.UndoCommandAsync();
+        await RefreshCommandsAsync();
+    }
+
+    private string OverrideLabel(string sensorId)
+        => _commands is not null && _commands.Overrides.TryGetValue(sensorId, out var pinned)
+            ? $"pinned {(pinned ? "on" : "off")}"
+            : "auto";
 
     private async Task RefreshQueueAsync()
     {
