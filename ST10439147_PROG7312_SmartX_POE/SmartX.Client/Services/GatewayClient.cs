@@ -161,6 +161,26 @@ public sealed class GatewayClient(HttpClient http)
             : null;
     }
 
+    // ---- timeline ----------------------------------------------------------
+
+    /// <summary>One sensor's readings in timestamp order, oldest first. Null if the gateway could not be reached or the sensor is gone.</summary>
+    public async Task<List<TimelinePoint>?> GetTimelineAsync(string sensorId, int samples = 60, CancellationToken ct = default)
+    {
+        try
+        {
+            return await http.GetFromJsonAsync<List<TimelinePoint>>(
+                $"api/sensors/{Uri.EscapeDataString(sensorId)}/timeline?samples={samples}", SmartXJson.Options, ct);
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Test trigger: has the gateway receive a few backdated readings for this sensor in shuffled order.</summary>
+    public async Task ScrambleTimelineAsync(string sensorId, CancellationToken ct = default)
+        => await http.PostAsync($"api/sensors/{Uri.EscapeDataString(sensorId)}/timeline/scramble", null, ct);
+
     // ---- manual override commands ------------------------------------------
 
     /// <summary>Undo history (newest first) and current overrides. Null if the gateway could not be reached.</summary>

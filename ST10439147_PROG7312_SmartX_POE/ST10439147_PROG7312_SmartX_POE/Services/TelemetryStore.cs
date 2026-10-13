@@ -21,6 +21,13 @@ namespace SmartX.Api.Services;
 /// <c>List</c> scan would be O(n) per packet. The key is the MAC in canonical form
 /// (<see cref="KeyFor"/>), which is also the id the gateway hands back, so a node can be
 /// found by either, however the MAC was typed.</para>
+///
+/// <para><b>Each sensor's timeline is a sorted dictionary.</b> The ring buffers hold
+/// packets in the order they arrived, which is what a rolling baseline wants. A timeline
+/// wants them in the order they were <em>taken</em>, and a mesh does not deliver in that
+/// order. <c>_timelines</c> keeps a <see cref="SortedDictionary{TKey,TValue}"/> per sensor
+/// keyed by timestamp: an insert is O(log n) wherever the key falls, and reading it back
+/// is already in time order, so a late packet needs no re-sort.</para>
 /// </summary>
 // ponytail: in-memory only, wiped on restart. Swap the dictionaries for a time-series
 // store (or even SQLite) if history has to outlive the process.
@@ -32,6 +39,9 @@ public sealed class TelemetryStore
 {
     private const int WindowPerSensor = 240;   // ~8 minutes at a 2s publish interval
 
+    /// <summary>Readings kept on each sensor's timeline before the oldest is dropped.</summary>
+    public const int TimelineCapacity = 240;
+
     private readonly ConcurrentDictionary<string, SensorRegistration> _sensors = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, CircularTelemetryBuffer<float>> _floats = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, CircularTelemetryBuffer<int>> _integers = new(StringComparer.OrdinalIgnoreCase);
@@ -39,6 +49,12 @@ public sealed class TelemetryStore
     private readonly ConcurrentDictionary<string, TelemetryBatchArchive> _archives = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, List<AttachmentInfo>> _attachments = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DateTimeOffset> _lastSeen = new(StringComparer.OrdinalIgnoreCase);
+
+    // SortedDictionary is not thread-safe: the worker writes while requests read, so
+    // every touch of one sensor's log locks that log.
+    // Reference: Microsoft. SortedDictionary<TKey,TValue> Class. Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/api/system.collections.generic.sorteddictionary-2
+    private readonly ConcurrentDictionary<string, SortedDictionary<DateTimeOffset, TimelinePoint>> _timelines = new(StringComparer.OrdinalIgnoreCase);
 
     private long _packetsIngested;
     private long _lookups;
@@ -101,6 +117,7 @@ public sealed class TelemetryStore
         }
 
         _attachments.TryAdd(sensor.Id, []);
+        _timelines.TryAdd(sensor.Id, []);
         return sensor;
     }
     //----------------------------------------------------------------------------------------------------------------------//
@@ -113,6 +130,7 @@ public sealed class TelemetryStore
         _archives.TryRemove(id, out _);
         _attachments.TryRemove(id, out _);
         _lastSeen.TryRemove(id, out _);
+        _timelines.TryRemove(id, out _);
         return _sensors.TryRemove(id, out _);
     }
 
@@ -146,9 +164,30 @@ public sealed class TelemetryStore
         if (_archives.TryGetValue(sensorId, out var archive)) archive.StageCycle(readings, at);
     }
     //----------------------------------------------------------------------------------------------------------------------//
+    /// <summary>
+    /// Files a reading on the sensor's timeline under the time it was taken. Arrival order
+    /// does not matter: the sorted dictionary puts it where its timestamp belongs.
+    /// </summary>
+    // ponytail: two readings from one sensor with the same timestamp keep only the later
+    // arrival. Key on (timestamp, sequence) if a node can ever publish twice in one tick.
+    public void LogReading(string sensorId, DateTimeOffset at, double value, long sequence)
+    {
+        if (!_timelines.TryGetValue(sensorId, out var log)) return;
+
+        lock (log)
+        {
+            log[at] = new TimelinePoint(at, value, sequence);
+
+            // Bounded like the ring buffers. The first key is always the oldest reading.
+            if (log.Count > TimelineCapacity) log.Remove(log.Keys.First());
+        }
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
     private void Touch(string sensorId, DateTimeOffset at)
     {
-        _lastSeen[sensorId] = at;
+        // A packet that arrives late carries an old timestamp; it must not wind the
+        // node's last-seen time backwards.
+        _lastSeen.AddOrUpdate(sensorId, at, (_, seen) => at > seen ? at : seen);
         Interlocked.Increment(ref _packetsIngested);
     }
 
@@ -168,6 +207,13 @@ public sealed class TelemetryStore
 
     public TelemetryBatchArchive? Archive(string sensorId)
         => _archives.GetValueOrDefault(sensorId);
+
+    /// <summary>The newest <paramref name="samples"/> readings, oldest first, in timestamp order.</summary>
+    public IReadOnlyList<TimelinePoint> Timeline(string sensorId, int samples)
+    {
+        if (!_timelines.TryGetValue(sensorId, out var log)) return [];
+        lock (log) return log.Values.Skip(Math.Max(0, log.Count - Math.Max(1, samples))).ToList();
+    }
     //----------------------------------------------------------------------------------------------------------------------//
 
     /// <summary>Latest value as a double for display purposes only; the stored packet keeps its real type.</summary>

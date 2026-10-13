@@ -36,6 +36,9 @@ internal static class SelfCheckRunner
 
             foreach (var line in RunRegistryChecks())
                 Console.WriteLine($"  ok  {line}");
+
+            foreach (var line in RunTimelineChecks())
+                Console.WriteLine($"  ok  {line}");
         }
         catch (Exception ex)
         {
@@ -223,6 +226,49 @@ internal static class SelfCheckRunner
         Assert(store.Remove("dc-a6-32-77-11-01") && !store.Exists(valve.Id), "removing by MAC should remove the device");
 
         log.Add("dictionary: a device is found by id or by MAC in any spelling, misses are counted");
+        return log;
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    private static IEnumerable<string> RunTimelineChecks()
+    {
+        var log = new List<string>();
+        var store = new TelemetryStore();
+
+        var probe = store.Register(new SensorRegistration
+        {
+            MacAddress = "A4:CF:12:9B:04:7E",
+            DisplayName = "Soil Moisture North",
+            DeploymentPath = "Facility A/Zone 1/Sub-Zone A",
+            Category = SensorCategory.SoilMoisture
+        });
+
+        // Readings taken at seconds 1..4 arrive in the order 3, 1, 4, 2. The value is the
+        // second it was taken at, so the expected timeline reads 1, 2, 3, 4.
+        var start = DateTimeOffset.UtcNow.AddMinutes(-30);
+        int[] arrivals = [3, 1, 4, 2];
+        for (var i = 0; i < arrivals.Length; i++)
+            store.LogReading(probe.Id, start.AddSeconds(arrivals[i]), arrivals[i], sequence: i + 1);
+
+        var timeline = store.Timeline(probe.Id, 10);
+        Assert(timeline.Select(p => p.Value).SequenceEqual([1, 2, 3, 4]),
+            $"out-of-order packets should read back in time order but got {string.Join(",", timeline.Select(p => p.Value))}");
+        Assert(timeline.Select(p => p.Sequence).SequenceEqual([2, 4, 1, 3]), "each point should still say when it arrived");
+        Assert(store.Timeline(probe.Id, 2).Select(p => p.Value).SequenceEqual([3, 4]), "asking for 2 samples should return the newest 2");
+
+        // Bounded: flood it past capacity and only the newest readings are left.
+        for (var i = 0; i < TelemetryStore.TimelineCapacity + 10; i++)
+            store.LogReading(probe.Id, start.AddSeconds(100 + i), i, sequence: 100 + i);
+
+        var full = store.Timeline(probe.Id, int.MaxValue);
+        Assert(full.Count == TelemetryStore.TimelineCapacity, $"the timeline should stop at {TelemetryStore.TimelineCapacity} readings, holds {full.Count}");
+        Assert(full[0].At == start.AddSeconds(110), "the oldest readings should be the ones dropped");
+
+        // A late packet lands in the past; it must not make the node look older than it is.
+        store.Ingest(new TelemetryPacket<float>(probe.Id, 31f, probe.Category, start.AddMinutes(5)));
+        store.Ingest(new TelemetryPacket<float>(probe.Id, 31f, probe.Category, start));
+        Assert(store.LastSeen(probe.Id) == start.AddMinutes(5), "a late packet must not move last-seen backwards");
+
+        log.Add("sorted dictionary: out-of-order packets read back in time order, the log stays bounded");
         return log;
     }
     //----------------------------------------------------------------------------------------------------------------------//

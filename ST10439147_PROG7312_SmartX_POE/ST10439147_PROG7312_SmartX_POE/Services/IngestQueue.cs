@@ -7,11 +7,20 @@ namespace SmartX.Api.Services;
 /// bool (0/1) all survive that round trip exactly - and the worker turns it back into
 /// the sensor's own <c>TelemetryPacket&lt;T&gt;</c> when it lands in the store.
 /// <see cref="ReceivedAt"/> is stamped at the door, so a packet that waited in a backlog
-/// still reports when the node sent it, not when the gateway got round to it.
+/// still reports when it reached the gateway, not when the worker got round to it.
 /// <see cref="Critical"/> is why it jumped the line, or null if it waited its turn.
+/// <see cref="SentAt"/> is the node's own clock, when the packet carried one.
 /// </summary>
 public readonly record struct QueuedPacket(
-    long Sequence, string SensorId, double Value, DateTimeOffset ReceivedAt, AlertKind? Critical = null);
+    long Sequence, string SensorId, double Value, DateTimeOffset ReceivedAt, AlertKind? Critical = null, DateTimeOffset? SentAt = null)
+{
+    /// <summary>
+    /// When the reading was taken: the node's timestamp if it sent one, otherwise the
+    /// moment it arrived. A mesh relays packets over several hops, so they can arrive out
+    /// of order - this, not arrival order, is where the reading belongs on a timeline.
+    /// </summary>
+    public DateTimeOffset Timestamp => SentAt ?? ReceivedAt;
+}
 
 /// <summary>
 /// The waiting line between the ingest endpoint and the store. The endpoint enqueues and
@@ -91,13 +100,13 @@ public sealed class IngestQueue
     /// Joins the back of the normal line, or the priority lane if <paramref name="critical"/>
     /// is set. False means that lane is full and the packet was dropped.
     /// </summary>
-    public bool TryEnqueue(string sensorId, double value, AlertKind? critical = null)
+    public bool TryEnqueue(string sensorId, double value, AlertKind? critical = null, DateTimeOffset? sentAt = null)
     {
         lock (_gate)
         {
             if ((critical is null ? _normal.Count : _critical.Count) >= MaxDepth) return false;
 
-            var packet = new QueuedPacket(++_sequence, sensorId, value, DateTimeOffset.UtcNow, critical);
+            var packet = new QueuedPacket(++_sequence, sensorId, value, DateTimeOffset.UtcNow, critical, sentAt);
 
             if (critical is null) _normal.Enqueue(packet);
             else _critical.Enqueue(packet, (critical == AlertKind.Spike ? 0 : 1, packet.Sequence));

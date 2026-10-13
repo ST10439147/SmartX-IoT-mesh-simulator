@@ -39,15 +39,17 @@ public sealed class IngestWorker(
                 switch (sensor.Payload)
                 {
                     case PayloadKind.Float:
-                        store.Ingest(new TelemetryPacket<float>(sensor.Id, (float)packet.Value, sensor.Category, packet.ReceivedAt));
+                        store.Ingest(new TelemetryPacket<float>(sensor.Id, (float)packet.Value, sensor.Category, packet.Timestamp));
                         break;
                     case PayloadKind.Integer:
-                        store.Ingest(new TelemetryPacket<int>(sensor.Id, (int)packet.Value, sensor.Category, packet.ReceivedAt));
+                        store.Ingest(new TelemetryPacket<int>(sensor.Id, (int)packet.Value, sensor.Category, packet.Timestamp));
                         break;
                     case PayloadKind.Boolean:
-                        store.Ingest(new TelemetryPacket<bool>(sensor.Id, packet.Value != 0, sensor.Category, packet.ReceivedAt));
+                        store.Ingest(new TelemetryPacket<bool>(sensor.Id, packet.Value != 0, sensor.Category, packet.Timestamp));
                         break;
                 }
+
+                store.LogReading(sensor.Id, packet.Timestamp, packet.Value, packet.Sequence);
 
                 var alert = anomalies.Evaluate(sensor);
                 if (alert is not null) await hub.Clients.All.SendAsync(HubEvents.AlertRaised, alert, stoppingToken);

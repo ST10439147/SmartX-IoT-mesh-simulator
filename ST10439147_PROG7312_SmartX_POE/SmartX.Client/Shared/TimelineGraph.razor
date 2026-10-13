@@ -1,0 +1,78 @@
+@*
+    A sensor's readings plotted against the time each was taken, not the order they arrived
+    in. The points come from the gateway already sorted by timestamp, so x is simply how far
+    along the visible time span a reading sits. A dashed marker shows a reading that arrived
+    late - after one newer than itself - and was slotted back into place.
+
+    Inline SVG for the same reason as the sparkline: a polyline is a handful of coordinates.
+*@
+
+@if (Points is { Count: > 1 })
+{
+    <svg class="timeline" viewBox="0 0 100 30" preserveAspectRatio="none" role="img" aria-label="@Label">
+        @foreach (var x in _lateMarks)
+        {
+            <line x1="@x" y1="0" x2="@x" y2="30" stroke="var(--warn)" stroke-width="1" stroke-dasharray="3 3" vector-effect="non-scaling-stroke" />
+        }
+        <polyline points="@_points"
+                  fill="none"
+                  stroke="var(--normal)"
+                  stroke-width="1.5"
+                  stroke-linejoin="round"
+                  vector-effect="non-scaling-stroke" />
+    </svg>
+    <div class="timeline-axis">
+        <span>@Points[0].At.ToLocalTime().ToString("HH:mm:ss")</span>
+        <span>@Points[^1].At.ToLocalTime().ToString("HH:mm:ss")</span>
+    </div>
+}
+else
+{
+    <p class="hint">Waiting for at least two readings.</p>
+}
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<TimelinePoint>? Points { get; set; }
+
+    [Parameter] public string Label { get; set; } = "readings over time";
+
+    private string _points = string.Empty;
+    private List<string> _lateMarks = [];
+
+    protected override void OnParametersSet()
+    {
+        if (Points is not { Count: > 1 }) return;
+
+        var start = Points[0].At;
+        var seconds = (Points[^1].At - start).TotalSeconds;
+        var min = Points.Min(p => p.Value);
+        var span = Points.Max(p => p.Value) - min;
+
+        // A flat signal would divide by zero; draw it down the middle instead.
+        string X(TimelinePoint p) => $"{(seconds < 1e-9 ? 0d : (p.At - start).TotalSeconds / seconds * 100d):0.##}";
+        string Y(TimelinePoint p) => $"{(span < 1e-9 ? 15d : 28d - (p.Value - min) * 26d / span):0.##}";
+
+        _points = string.Join(' ', Points.Select(p => $"{X(p)},{Y(p)}"));
+
+        var late = LateFlags(Points);
+        _lateMarks = Points.Where((_, i) => late[i]).Select(X).ToList();
+    }
+
+    /// <summary>
+    /// For points in time order: true where the reading reached the gateway after a newer
+    /// one did, i.e. its arrival number is higher than that of some later point.
+    /// </summary>
+    public static bool[] LateFlags(IReadOnlyList<TimelinePoint> points)
+    {
+        var late = new bool[points.Count];
+        var earliestArrivalAfter = long.MaxValue;
+
+        for (var i = points.Count - 1; i >= 0; i--)
+        {
+            late[i] = points[i].Sequence > earliestArrivalAfter;
+            earliestArrivalAfter = Math.Min(earliestArrivalAfter, points[i].Sequence);
+        }
+
+        return late;
+    }
+}

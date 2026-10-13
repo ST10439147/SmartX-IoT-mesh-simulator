@@ -305,6 +305,59 @@ that way: it is accepted with `202`, where an unregistered MAC gets `404`.
 
 The self-check's `dictionary:` line covers the same lookups.
 
+### SortedDictionary: the sensor timeline
+
+A mesh relays packets over several hops, so they do not always reach the gateway in the
+order the nodes sent them. A reading may carry the node's own `timestamp`; if it does not,
+the gateway stamps it on arrival. Each sensor's log is a
+`SortedDictionary<DateTimeOffset, TimelinePoint>` keyed by that timestamp, so a late
+packet is inserted where it belongs in time (O(log n)) and the log reads back already in
+order. Nothing is re-sorted when the graph asks for it. The log keeps the newest 240
+readings per sensor.
+
+**On the dashboard** (panel: *Sensor timeline*):
+
+1. Pick a sensor. The graph plots its last 60 readings against the time each was taken.
+2. Click **Send 8 packets out of order**. The gateway receives eight backdated readings
+   for that sensor in shuffled order.
+3. The line under the graph reports 8 late readings and the graph marks each with a dashed
+   line. In the table the late rows are highlighted: *taken at* still runs in order down
+   the whole table, while their *arrived* numbers are higher than the rows above them and
+   out of sequence with each other.
+
+**With curl:**
+
+```bash
+curl -X POST "http://localhost:5036/api/sensors/A4:CF:12:9B:04:7E/timeline/scramble?count=5"
+```
+
+```bash
+curl "http://localhost:5036/api/sensors/A4:CF:12:9B:04:7E/timeline?samples=12"
+```
+
+The first response lists the timestamps in the order they were sent. In the second, `at`
+ascends from the first entry to the last, while `sequence` (arrival order) does not:
+
+```
+at 12:31:02.37  sequence 1074
+at 12:31:03.37  sequence 1089   late
+at 12:31:04.37  sequence 1084
+at 12:31:05.37  sequence 1088   late
+at 12:31:06.37  sequence 1099
+```
+
+To send a single late packet yourself, add a `timestamp` to a normal reading:
+
+```bash
+curl -X POST http://localhost:5036/api/telemetry -H "Content-Type: application/json" -d "{\"sensorId\":\"A4:CF:12:9B:04:7E\",\"value\":31,\"timestamp\":\"2026-01-01T08:00:00Z\"}"
+```
+
+A timestamp more than five seconds in the future is rejected with `400`. Two readings
+from one sensor with an identical timestamp keep only the one that arrived last.
+
+The self-check's `sorted dictionary:` line feeds readings in the order 3, 1, 4, 2 and
+asserts they read back 1, 2, 3, 4.
+
 ---
 
 ## Architecture
@@ -338,6 +391,7 @@ DTO translation layer and no chance of the two sides drifting.
 | **Recursion** | `TopologyValidator` walks Facility → Zone → Sub-Zone → Node, reporting issues by breadcrumb path, with a depth ceiling and a cycle guard so a malformed tree is an error rather than a `StackOverflowException`. |
 | **Collections** | `CircularTelemetryBuffer<T>` - fixed-capacity, array-backed, `IEnumerable<TelemetryPacket<T>>`. An unbounded stream into a `List<T>` grows until the gateway dies; the ring bounds memory *and* provides exactly the window the anomaly detector needs for its rolling baseline. |
 | **Dictionary** | `TelemetryStore` keeps the device registry in a `ConcurrentDictionary<string, SensorRegistration>` keyed by canonical MAC. `TryGet` is the lookup every packet arrival goes through, by MAC or id, and it counts lookups and misses for `GET /api/registry`. The concurrent variant is used because request threads and the ingest worker read it at the same time. |
+| **SortedDictionary** | `TelemetryStore` keeps a `SortedDictionary<DateTimeOffset, TimelinePoint>` per sensor, keyed by the time the reading was taken. `LogReading` inserts wherever the timestamp falls, so packets that arrive out of order are still served in time order by `GET /api/sensors/{id}/timeline` and drawn that way by the dashboard's timeline graph. |
 | **File upload** | `MultipartReader` streaming (never `IFormFile` buffering), magic-byte content sniffing, path-traversal stripping, a 25 MB ceiling enforced mid-flight, and AES-256-GCM at rest with per-chunk nonces and authenticated chunk indices. |
 | **Engagement** | The strategy chosen in Part 1 Task 1: anomaly-first visual encoding, severity-ranked rail, z-score spike detection against a rolling baseline, a *separate* silence timer for disconnects, and suppression-not-deletion of repeatedly dismissed alerts. |
 
@@ -358,7 +412,9 @@ Base path `/api`. Enums travel as names.
 | `DELETE` | `/sensors/{id}` | Deregister |
 | `GET` | `/sensors/{id}/history?samples=n` | Typed `TelemetryPacket<T>` history straight off the ring |
 | `GET` | `/sensors/{id}/archive` | Float sensors only: jagged staging rows, the shape of their rectangular projection, the newest flushed packets |
-| `POST` | `/telemetry` | Ingest one reading `{ sensorId, value }` - queued, then ingested by the background worker |
+| `GET` | `/sensors/{id}/timeline?samples=n` | The sensor's log in timestamp order, each point with its arrival `sequence` |
+| `POST` | `/sensors/{id}/timeline/scramble?count=` | Test trigger: receive backdated readings for the sensor in shuffled order |
+| `POST` | `/telemetry` | Ingest one reading `{ sensorId, value, timestamp? }` - queued, then ingested by the background worker |
 | `GET` | `/queue` | Queue depth per lane and the recent processing order |
 | `POST` | `/queue/flood?count=&delayMs=` | Test trigger: back the normal lane up and slow the worker |
 | `GET` | `/commands` | Override command history (newest first) and current overrides |

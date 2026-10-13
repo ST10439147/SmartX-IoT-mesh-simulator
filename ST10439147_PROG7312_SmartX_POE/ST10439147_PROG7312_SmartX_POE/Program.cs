@@ -140,6 +140,12 @@ api.MapPost("/telemetry", (TelemetryReading reading, TelemetryStore store, Anoma
     if (reading.SensorId is null || !store.TryGet(reading.SensorId, out var sensor))
         return Results.NotFound(new { message = $"No sensor registered with id '{reading.SensorId}'." });
 
+    // A node may stamp the reading with its own clock. An old timestamp is a late packet
+    // and is welcome; one from the future is a broken clock, and would sit at the end of
+    // the timeline ahead of every real reading.
+    if (reading.Timestamp > DateTimeOffset.UtcNow.AddSeconds(5))
+        return Results.BadRequest(new { message = "Timestamp is in the future." });
+
     var value = reading.Value;
     double queued;
 
@@ -159,7 +165,7 @@ api.MapPost("/telemetry", (TelemetryReading reading, TelemetryStore store, Anoma
     }
 
     // A reading that would breach a threshold or is a spike goes in the priority lane.
-    return queue.TryEnqueue(sensor.Id, queued, anomalies.Classify(sensor, queued))
+    return queue.TryEnqueue(sensor.Id, queued, anomalies.Classify(sensor, queued), reading.Timestamp)
         ? Results.Accepted()
         : Results.Problem("Ingest queue is full.", statusCode: StatusCodes.Status503ServiceUnavailable);
 });
@@ -272,6 +278,41 @@ api.MapGet("/sensors/{id}/history", (string id, TelemetryStore store, [FromQuery
         PayloadKind.Boolean => Results.Ok(store.Booleans(id)?.TakeLast(samples) ?? []),
         _ => Results.NotFound()
     };
+});
+
+// The sensor's log in timestamp order, straight out of its SortedDictionary. `sequence`
+// is the order each reading arrived in; where it runs backwards, a packet arrived late.
+api.MapGet("/sensors/{id}/timeline", (string id, TelemetryStore store, [FromQuery] int samples = 60) =>
+    store.TryGet(id, out var sensor)
+        ? Results.Ok(store.Timeline(sensor.Id, samples))
+        : Results.NotFound());
+
+// Test trigger: sends a handful of backdated readings for one sensor in shuffled order,
+// the way a mesh delivers packets that took different routes. Each repeats the sensor's
+// latest value, so none of them is an anomaly. GET the timeline afterwards: `at` still
+// ascends while `sequence` does not.
+api.MapPost("/sensors/{id}/timeline/scramble", (string id, TelemetryStore store, IngestQueue queue, [FromQuery] int count = 8) =>
+{
+    if (!store.TryGet(id, out var sensor)) return Results.NotFound();
+
+    var value = store.LatestNumeric(sensor.Id);
+    if (double.IsNaN(value)) return Results.Conflict(new { message = "This sensor has not published yet." });
+
+    // One per publish interval going back from now, offset by half an interval so each
+    // falls between two readings the node really sent. The newest is 1.5 intervals old,
+    // so every one of them is older than a reading the gateway already has.
+    var now = DateTimeOffset.UtcNow;
+    var sent = Enumerable.Range(1, Math.Clamp(count, 2, 20))
+        .Select(i => now.AddSeconds(-(i + 0.5) * sensor.PublishIntervalSeconds))
+        .ToArray();
+
+    // Oldest-first would be in order. A shuffle can land on that, so turn it round if it does.
+    Random.Shared.Shuffle(sent);
+    if (sent.SequenceEqual(sent.Order())) Array.Reverse(sent);
+
+    foreach (var at in sent) queue.TryEnqueue(sensor.Id, value, sentAt: at);
+
+    return Results.Accepted($"/api/sensors/{sensor.Id}/timeline", new { sentInThisOrder = sent });
 });
 
 // Shows the jagged staging area and its rectangular projection side by side.
@@ -452,5 +493,6 @@ internal sealed record RestoreRequest(string SensorId, AlertKind Kind);
 internal sealed record CommandRequest(string? SensorId, SensorCategory? Category, bool State);
 
 // Value stays a JsonElement until the sensor's payload kind says which type to read it as.
-internal sealed record TelemetryReading(string SensorId, JsonElement Value);
+// Timestamp is optional: a node without a clock leaves it out and the gateway stamps arrival.
+internal sealed record TelemetryReading(string SensorId, JsonElement Value, DateTimeOffset? Timestamp = null);
 //---------------------------DDDDDDDDDDDoooooooooooooo END OF FILE DDDDDDDDDDDoooooooooooooo---------------------------//
