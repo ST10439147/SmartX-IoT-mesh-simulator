@@ -34,6 +34,7 @@ builder.Services.AddSingleton<TelemetryStore>();
 builder.Services.AddSingleton<AnomalyEngine>();
 builder.Services.AddSingleton<AttachmentService>();
 builder.Services.AddSingleton<IngestQueue>();
+builder.Services.AddSingleton<CommandService>();
 // Reference [23]: Microsoft. Background tasks with hosted services in ASP.NET Core. Microsoft Learn.
 //   https://learn.microsoft.com/aspnet/core/fundamentals/host/hosted-services
 builder.Services.AddHostedService<IngestWorker>();
@@ -196,6 +197,54 @@ api.MapPost("/queue/flood", (TelemetryStore store, IngestQueue queue, [FromQuery
 
     return Results.Accepted("/api/queue", new { enqueued, depth = queue.Depth, throttleMs = queue.Throttle.TotalMilliseconds });
 });
+
+// ---------------------------------------------------------------- manual override commands
+
+// The undo stack, newest command first, plus which actuators are pinned right now.
+api.MapGet("/commands", (CommandService commands) => Results.Ok(new
+{
+    history = commands.History,
+    overrides = commands.Overrides
+}));
+
+// Pins one actuator (sensorId) or every actuator of a kind (category) on or off.
+// "Shut all valves" is { "category": "IrrigationValve", "state": false }.
+api.MapPost("/commands", (CommandRequest request, TelemetryStore store, CommandService commands) =>
+{
+    List<SensorRegistration> targets;
+
+    if (request.SensorId is not null)
+    {
+        if (!store.TryGet(request.SensorId, out var sensor))
+            return Results.NotFound(new { message = $"No sensor registered with id '{request.SensorId}'." });
+
+        targets = [sensor];
+    }
+    else if (request.Category is { } category)
+    {
+        targets = store.Sensors.Where(s => s.Category == category).OrderBy(s => s.Id).ToList();
+    }
+    else
+    {
+        return Results.BadRequest(new { message = "Give a sensorId or a category to command." });
+    }
+
+    // Only actuators take an on/off command - a moisture probe has nothing to switch.
+    if (targets.Count == 0 || targets.Any(s => s.Payload != PayloadKind.Boolean))
+        return Results.BadRequest(new { message = "Override commands only apply to registered actuators (valves, vents)." });
+
+    var action = request.State ? "on" : "off";
+    var label = request.SensorId is not null
+        ? $"Switch {targets[0].DisplayName} {action}"
+        : $"Switch all {targets[0].Category.Spec().Label} devices {action}";
+
+    return Results.Ok(commands.Issue(label, targets.Select(s => s.Id), request.State));
+});
+
+api.MapPost("/commands/undo", (CommandService commands) =>
+    commands.TryUndo(out var undone)
+        ? Results.Ok(undone)
+        : Results.Conflict(new { message = "Nothing to undo." }));
 
 // Returns the typed packets themselves, so TelemetryPacket<T> is what crosses the wire
 // rather than a flattened DTO. The client deserialises straight back into the same type.
@@ -385,6 +434,9 @@ static Dictionary<string, string[]> Validate(object model)
 
 // The request body is a simple JSON object with two properties, so a record is a good fit.
 internal sealed record RestoreRequest(string SensorId, AlertKind Kind);
+
+// Exactly one of SensorId / Category picks the target; State is the position to pin it to.
+internal sealed record CommandRequest(string? SensorId, SensorCategory? Category, bool State);
 
 // Value stays a JsonElement until the sensor's payload kind says which type to read it as.
 internal sealed record TelemetryReading(string SensorId, JsonElement Value);

@@ -104,6 +104,8 @@ SmartX self-check
   ok  crypto: AES-256-GCM round-trips at 0, 1, 1 KB, 64 KB and multi-chunk sizes
   ok  crypto: bit-flips, truncation and wrong keys are all rejected
   ok  uploads: magic-byte sniffing, text validation and path-traversal stripping
+  ok  queue: FIFO for normal packets, criticals jump the line, a full lane sheds load
+  ok  stack: commands undo last-in-first-out, a batch reverts as one, empty undo is safe
 ----------------------------------------------------------------
 all checks passed
 ```
@@ -160,6 +162,105 @@ mismatched at registration (defined once in `SensorCategoryExtensions.Spec`):
 
 ---
 
+## Testing the queue and the stack
+
+Start the app (see Quick start) and open the **Live dashboard** at
+<http://localhost:5036/dashboard>. Both features have a panel there, and both can also be
+driven with `curl`. The `curl` commands below are quoted for Git Bash, macOS/Linux shells
+and Windows `cmd`; in PowerShell use the dashboard buttons instead.
+
+### Queue and priority queue: simulate a high-priority alert
+
+Every reading posted to `POST /api/telemetry` is placed in a `Queue<T>` and a background
+worker ingests it in arrival order (FIFO). A reading that is a spike or breaches the
+sensor's warning threshold goes into a `PriorityQueue<TElement,TPriority>` instead, and
+the worker always empties that lane first.
+
+**On the dashboard** (panel: *Ingest queue*):
+
+1. Click **Flood the queue**. *Waiting (normal)* jumps to about 200 and counts down over
+   roughly six seconds, because the flood also slows the worker so the backlog is visible.
+2. While it is still counting down, click **Send critical packet**.
+3. Read the line under the counters. It reports the critical packet's arrival number, the
+   position it was processed at, and how many older normal packets it overtook. In the
+   *Processing order* table the critical row is highlighted in red, with an *arrived*
+   number far higher than the rows around it.
+
+**With curl:**
+
+```bash
+curl -X POST "http://localhost:5036/api/queue/flood?count=200&delayMs=20"
+```
+
+```bash
+curl -X POST http://localhost:5036/api/telemetry -H "Content-Type: application/json" -d "{\"sensorId\":\"A4:CF:12:9B:04:7E\",\"value\":95}"
+```
+
+```bash
+curl http://localhost:5036/api/queue
+```
+
+The second command sends a soil-moisture reading of 95 from a probe that normally reads
+about 31, which is a spike. In the `recent` array of the third response, find the entry
+with `"lane": "critical"`: its `sequence` (arrival order) is higher than the entries
+after it, while its `position` (processing order) is lower. For example:
+
+```
+position 1125  sequence 1125  normal
+position 1126  sequence 1323  critical  Spike
+position 1127  sequence 1126  normal
+```
+
+`depth` and `criticalDepth` in the same response are the number of packets waiting in
+each lane. Keep floods short: `count` is capped at 2 000 and `delayMs` at 250, and a long
+backlog delays live readings enough to raise false "silent node" alerts.
+
+### Stack: manual override commands and Undo
+
+A manual override pins an actuator (valve or vent) on or off. Each command is pushed onto
+a `Stack<T>`; Undo pops the most recent one and puts every device it touched back the way
+it was.
+
+**On the dashboard** (panel: *Manual override*):
+
+1. Click **On** next to *Drip Line Valve A*. It shows *pinned on* and, within a few
+   seconds, reads OPEN.
+2. Click **Shut all valves**. The valve shows *pinned off* and reads SHUT. The history on
+   the right now lists two commands, the newest tagged *next undo*.
+3. Click **Undo last command**. The valve goes back to *pinned on* - the state before
+   "shut all valves" - not merely to automatic.
+4. Click **Undo last command** again. The valve returns to *auto*, the history is empty
+   and the Undo button is disabled.
+
+**With curl:**
+
+```bash
+curl -X POST http://localhost:5036/api/commands -H "Content-Type: application/json" -d "{\"sensorId\":\"DC:A6:32:77:11:01\",\"state\":true}"
+```
+
+```bash
+curl -X POST http://localhost:5036/api/commands -H "Content-Type: application/json" -d "{\"category\":\"IrrigationValve\",\"state\":false}"
+```
+
+```bash
+curl http://localhost:5036/api/commands
+```
+
+```bash
+curl -X POST http://localhost:5036/api/commands/undo
+```
+
+`GET /api/commands` returns `history` (newest first, the order Undo takes them in) and
+`overrides` (which actuators are pinned right now). Each undo returns the command it
+reverted; once the stack is empty it answers `409` with `"Nothing to undo."` rather than
+failing. Commanding a sensor that is not an actuator returns `400`.
+
+Both structures are also covered by the self-check (see Verifying the build): the `queue:`
+line proves FIFO order and that criticals jump the line, and the `stack:` line proves
+last-in-first-out undo.
+
+---
+
 ## Architecture
 
 ```
@@ -209,6 +310,12 @@ Base path `/api`. Enums travel as names.
 | `DELETE` | `/sensors/{id}` | Deregister |
 | `GET` | `/sensors/{id}/history?samples=n` | Typed `TelemetryPacket<T>` history straight off the ring |
 | `GET` | `/sensors/{id}/archive` | Float sensors only: jagged staging rows, the shape of their rectangular projection, the newest flushed packets |
+| `POST` | `/telemetry` | Ingest one reading `{ sensorId, value }` - queued, then ingested by the background worker |
+| `GET` | `/queue` | Queue depth per lane and the recent processing order |
+| `POST` | `/queue/flood?count=&delayMs=` | Test trigger: back the normal lane up and slow the worker |
+| `GET` | `/commands` | Override command history (newest first) and current overrides |
+| `POST` | `/commands` | Pin one actuator `{ sensorId, state }` or a whole kind `{ category, state }` |
+| `POST` | `/commands/undo` | Revert the most recent command - 409 when there is none |
 | `GET` | `/telemetry/aggregate?a=&b=` | Operator overloading over HTTP: sum, delta, comparison |
 | `GET` | `/alerts?includeSuppressed=` | Severity-ranked alert rail |
 | `POST` | `/alerts/{id}/dismiss` | Dismiss, and count toward suppression of that kind |
