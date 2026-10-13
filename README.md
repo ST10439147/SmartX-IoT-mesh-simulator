@@ -252,7 +252,8 @@ curl -X POST http://localhost:5036/api/commands/undo
 ```
 
 `GET /api/commands` returns `history` (newest first, the order Undo takes them in) and
-`overrides` (which actuators are pinned right now). Each undo returns the command it
+`overrides` (which actuators are pinned right now); `GET /api/commands/history` returns
+the history list alone. Each undo returns the command it
 reverted; once the stack is empty it answers `409` with `"Nothing to undo."` rather than
 failing. Commanding a sensor that is not an actuator returns `400`.
 

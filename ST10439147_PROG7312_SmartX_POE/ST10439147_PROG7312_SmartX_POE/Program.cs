@@ -228,6 +228,9 @@ api.MapGet("/commands", (CommandService commands) => Results.Ok(new
     overrides = commands.Overrides
 }));
 
+// Just the undo stack, newest command first.
+api.MapGet("/commands/history", (CommandService commands) => Results.Ok(commands.History));
+
 // Pins one actuator (sensorId) or every actuator of a kind (category) on or off.
 // "Shut all valves" is { "category": "IrrigationValve", "state": false }.
 api.MapPost("/commands", (CommandRequest request, TelemetryStore store, CommandService commands) =>
