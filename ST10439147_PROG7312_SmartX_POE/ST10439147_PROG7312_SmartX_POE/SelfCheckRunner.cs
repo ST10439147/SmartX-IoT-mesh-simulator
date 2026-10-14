@@ -46,6 +46,9 @@ internal static class SelfCheckRunner
 
             foreach (var line in RunPredictionLogChecks())
                 Console.WriteLine($"  ok  {line}");
+
+            foreach (var line in RunTrendChecks())
+                Console.WriteLine($"  ok  {line}");
         }
         catch (Exception ex)
         {
@@ -446,6 +449,45 @@ internal static class SelfCheckRunner
         log.Add("prediction log: every search and command is logged with the alert that was open at the time");
         log.Add("dictionary of counters: after-X-did-Y pairs are counted and the most frequent follow-up ranks first");
         log.Add("suggestion: when a moisture alert recurs, the pump the operator keeps searching for is suggested");
+        return log;
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    private static IEnumerable<string> RunTrendChecks()
+    {
+        var log = new List<string>();
+        var store = new TelemetryStore();
+        var predictions = new PredictionService(store, new AnomalyEngine(store, new CommandService(), NullLogger<AnomalyEngine>.Instance));
+
+        // Four moisture probes (threshold 45 %VWC, a packet every 2s), each fed 30 readings.
+        var start = DateTimeOffset.UtcNow.AddMinutes(-2);
+        string Probe(int n, Func<int, float> reading)
+        {
+            var probe = store.Register(new SensorRegistration
+            {
+                MacAddress = $"A4:CF:12:9B:07:{n:X2}",
+                DisplayName = $"Trend probe {n}",
+                DeploymentPath = "Facility A/Zone 1/Sub-Zone A",
+                Category = SensorCategory.SoilMoisture,
+                PublishIntervalSeconds = 2
+            });
+
+            for (var i = 0; i < PredictionService.TrendSamples; i++)
+                store.Ingest(new TelemetryPacket<float>(probe.Id, reading(i), probe.Category, start.AddSeconds(i * 2)));
+            return probe.Id;
+        }
+
+        Probe(1, i => i % 2 == 0 ? 29f : 31f);          // noise about a flat line
+        var climbing = Probe(2, i => 30f + 0.3f * i);   // ends at 38.7, +0.15/s: crosses 45 in 42s
+        Probe(3, i => 30f + 0.01f * i);                 // climbing, but would take half an hour
+        Probe(4, i => 40f + 0.3f * i);                  // already over 45: a breach, not a trend
+
+        var flags = predictions.TrendFlags();
+        Assert(flags.Count == 1 && flags[0].SensorId == climbing,
+            $"only the steady climb close to its threshold should be flagged, got {string.Join(", ", flags.Select(f => f.SensorName))}");
+        Assert(Math.Abs(flags[0].SecondsToThreshold - 42) < 1 && Math.Abs(flags[0].SlopePerSecond - 0.15) < 1e-3,
+            $"the climb should be projected to cross in about 42s, got {flags[0].SecondsToThreshold:0.#}s");
+
+        log.Add("trend: a least-squares line flags a device climbing toward its threshold and when it will cross");
         return log;
     }
     //----------------------------------------------------------------------------------------------------------------------//

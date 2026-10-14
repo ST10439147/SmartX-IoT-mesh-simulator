@@ -195,6 +195,19 @@ public sealed class GatewayClient(HttpClient http)
         }
     }
 
+    /// <summary>Devices climbing toward their threshold, soonest first. Empty if the gateway could not be reached.</summary>
+    public async Task<IReadOnlyList<TrendFlag>> GetTrendsAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            return await http.GetFromJsonAsync<List<TrendFlag>>("api/predictions/trends", SmartXJson.Options, ct) ?? [];
+        }
+        catch (HttpRequestException)
+        {
+            return [];
+        }
+    }
+
     // ---- timeline ----------------------------------------------------------
 
     /// <summary>One sensor's readings in timestamp order, oldest first. Null if the gateway could not be reached or the sensor is gone.</summary>

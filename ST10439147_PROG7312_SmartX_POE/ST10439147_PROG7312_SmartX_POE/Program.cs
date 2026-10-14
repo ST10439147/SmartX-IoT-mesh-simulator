@@ -303,14 +303,17 @@ api.MapGet("/predictions/log", (PredictionService predictions) => predictions.Lo
 // The dictionary of counters: every event seen, each with its follow-ups ranked.
 api.MapGet("/predictions/pairs", (PredictionService predictions) => predictions.Pairs);
 
-// The top follow-ups to one event, e.g. ?context=SoilMoisture|ThresholdBreach&top=3.
 // The suggestion for the alert that is driving the operator right now, so a dashboard
 // opened mid-alert still shows it. 204 when there is none. New ones are pushed as
 // HubEvents.SuggestionReady the moment their alert is raised.
 api.MapGet("/predictions/suggestion", (PredictionService predictions) =>
     predictions.Current is { } suggestion ? Results.Ok(suggestion) : Results.NoContent());
 
-api.MapGet("/predictions/rank",([FromQuery] string context, PredictionService predictions, [FromQuery] int top = 3) =>
+// Devices under their threshold but projected to cross it within the trend horizon, soonest first.
+api.MapGet("/predictions/trends", (PredictionService predictions) => predictions.TrendFlags());
+
+// The top follow-ups to one event, e.g. ?context=SoilMoisture|ThresholdBreach&top=3.
+api.MapGet("/predictions/rank", ([FromQuery] string context, PredictionService predictions, [FromQuery] int top = 3) =>
     predictions.Rank(context, Math.Clamp(top, 1, 20)));
 
 // Returns the typed packets themselves, so TelemetryPacket<T> is what crosses the wire
@@ -452,6 +455,20 @@ api.MapPost("/sensors/{id}/unplug", (string id, TelemetryStore store, MeshSimula
     mesh.Unplug(sensor.Id, TimeSpan.FromSeconds(seconds));
 
     return Results.Accepted("/api/faults", new { sensor.Id, silentForSeconds = seconds });
+});
+
+// Test trigger: the simulated node's reading starts climbing by perSecond units a second,
+// for the trend flags in GET /api/predictions/trends to catch. Left out, the rate is set so
+// the node reaches its threshold in about 90 seconds. perSecond=0 stops it and drops back.
+api.MapPost("/sensors/{id}/drift", (string id, TelemetryStore store, MeshSimulator mesh, [FromQuery] double? perSecond) =>
+{
+    if (!store.TryGet(id, out var sensor)) return Results.NotFound();
+    if (sensor.Payload == PayloadKind.Boolean) return Results.BadRequest(new { message = "Valves and vents report a state; there is nothing to drift." });
+
+    var rate = perSecond ?? Math.Max(0, sensor.WarningThreshold - store.LatestNumeric(sensor.Id)) / 90;
+    mesh.Drift(sensor.Id, rate);
+
+    return Results.Accepted("/api/predictions/trends", new { sensor.Id, perSecond = rate });
 });
 
 // ---------------------------------------------------------------- topology (recursion)

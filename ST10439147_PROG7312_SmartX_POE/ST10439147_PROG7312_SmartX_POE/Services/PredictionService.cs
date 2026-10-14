@@ -162,6 +162,86 @@ public sealed class PredictionService(TelemetryStore store, AnomalyEngine anomal
         return contexts.ToList();
     }
 
+    //----------------------------------------------------------------------------------------------------------------------//
+    /// <summary>Samples the trend line is fitted over. 30 at a 2s interval is the last minute.</summary>
+    public const int TrendSamples = 30;
+
+    /// <summary>Flag a device projected to cross its threshold within this long.</summary>
+    public static readonly TimeSpan TrendHorizon = TimeSpan.FromMinutes(3);
+
+    /// <summary>
+    /// How well the line has to fit (R squared, 0..1) before it counts as a trend. Noise
+    /// wandering about a flat baseline fits a line badly; a steady climb fits it well.
+    /// </summary>
+    public const double MinTrendFit = 0.6;
+
+    /// <summary>
+    /// Devices under their threshold but climbing toward it, soonest first. A least-squares
+    /// line through each device's recent readings gives the rate of climb; where that line
+    /// meets the threshold is when it will cross if nothing changes.
+    /// </summary>
+    // ponytail: least squares is pulled about by a single spike in the window; the fit gate
+    // catches most of that. Switch to Theil-Sen (median of pairwise slopes) if spikes still leak through.
+    // Reference: Wikipedia. Simple linear regression.
+    //   https://en.wikipedia.org/wiki/Simple_linear_regression
+    public IReadOnlyList<TrendFlag> TrendFlags()
+    {
+        var silent = anomalies.Disconnected.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var flags = new List<TrendFlag>();
+
+        foreach (var sensor in store.Sensors)
+        {
+            // Valves and vents report a state, not a level; a silent node's window is stale.
+            if (sensor.Payload == PayloadKind.Boolean || silent.Contains(sensor.Id)) continue;
+
+            IEnumerable<double> window = store.Window(sensor.Id, TrendSamples);
+
+            // A pump's 0 W readings are time spent stopped, not load - same rule as the anomaly baseline.
+            if (sensor.Category == SensorCategory.PumpPower) window = window.Where(v => v > 0);
+
+            if (Fit(window.ToList()) is not { } line) continue;
+            var (current, slopePerSample, fit) = line;
+
+            var slope = slopePerSample / sensor.PublishIntervalSeconds;
+            if (slope <= 0 || fit < MinTrendFit || current >= sensor.WarningThreshold) continue;
+
+            var eta = (sensor.WarningThreshold - current) / slope;
+            if (eta > TrendHorizon.TotalSeconds) continue;
+
+            flags.Add(new TrendFlag(sensor.Id, sensor.DisplayName, sensor.Unit, current, sensor.WarningThreshold, slope, eta));
+        }
+
+        return flags.OrderBy(f => f.SecondsToThreshold).ToList();
+    }
+
+    /// <summary>
+    /// Least-squares line through <paramref name="y"/> at x = 0, 1, 2...: the fitted value at
+    /// the last sample, the slope per sample, and R squared. Null when there is too little
+    /// data or the signal is perfectly flat.
+    /// </summary>
+    private static (double Current, double Slope, double Fit)? Fit(IReadOnlyList<double> y)
+    {
+        var n = y.Count;
+        if (n < AnomalyEngine.MinSamplesForBaseline) return null;
+
+        var meanX = (n - 1) / 2.0;
+        var meanY = y.Average();
+
+        double sxy = 0, sxx = 0, syy = 0;
+        for (var x = 0; x < n; x++)
+        {
+            sxy += (x - meanX) * (y[x] - meanY);
+            sxx += (x - meanX) * (x - meanX);
+            syy += (y[x] - meanY) * (y[x] - meanY);
+        }
+
+        if (syy < 1e-9) return null;
+
+        var slope = sxy / sxx;
+        var current = meanY + slope * (n - 1 - meanX);
+        return (current, slope, sxy * sxy / (sxx * syy));   // R squared of a simple regression
+    }
+
     private static bool Actionable(Alert alert) => !alert.Suppressed && alert.Kind != AlertKind.StateChange;
 
     private static string ContextKey(SensorRegistration sensor, Alert alert) => $"{sensor.Category}|{alert.Kind}";

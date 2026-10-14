@@ -78,6 +78,22 @@
         </div>
     }
 
+    @if (_trends.Count > 0)
+    {
+        <div class="suggestion">
+            <p class="hint"><span class="tag warn">trending</span> Still under threshold, but climbing toward it:</p>
+            <div class="actions">
+                @foreach (var trend in _trends)
+                {
+                    <button class="ghost" @onclick="() => OpenTrend(trend)">
+                        @trend.SensorName: @trend.Current.ToString("0.##") &rarr; @trend.Threshold.ToString("0.##")@trend.Unit
+                        in ~@Math.Ceiling(trend.SecondsToThreshold)s
+                    </button>
+                }
+            </div>
+        </div>
+    }
+
     <form class="form-grid" @onsubmit="SearchAsync">
         <div class="field">
             <label for="search-term">Find a device</label>
@@ -747,6 +763,7 @@
     private IReadOnlyList<SensorSnapshot>? _searchResults;   // null until the first search
 
     private Suggestion? _suggestion;
+    private IReadOnlyList<TrendFlag> _trends = [];
 
     // Same window the gateway uses for "this alert is why the operator is acting": past it,
     // the suggestion is stale. The once-a-second tick re-renders, so it drops off on its own.
@@ -805,6 +822,7 @@
             await RefreshRegistryAsync();
             await RefreshTimelineAsync();
             await RefreshFaultsAsync();
+            _trends = await Gateway.GetTrendsAsync();
 
             await InvokeAsync(StateHasChanged);
         });
@@ -938,6 +956,11 @@
 
         // One hit is the device the operator wanted, so open it straight away.
         if (_searchResults.Count == 1) await SelectSensor(_searchResults[0]);
+    }
+
+    private async Task OpenTrend(TrendFlag trend)
+    {
+        if (_snapshots.FirstOrDefault(s => s.Id == trend.SensorId) is { } sensor) await SelectSensor(sensor);
     }
 
     // Goes through the normal search, so taking a suggestion is logged and reinforces it.
