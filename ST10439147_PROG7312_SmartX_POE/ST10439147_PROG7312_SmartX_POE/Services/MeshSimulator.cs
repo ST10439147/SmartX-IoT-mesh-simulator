@@ -20,6 +20,7 @@ public sealed class MeshSimulator(
     TelemetryStore store,
     AnomalyEngine anomalies,
     CommandService commands,
+    PredictionService predictions,
     IHubContext<TelemetryHub> hub,
     IServer server,
     IHostApplicationLifetime lifetime,
@@ -100,7 +101,12 @@ public sealed class MeshSimulator(
                 if (elapsed % 5 == 0)
                 {
                     foreach (var alert in anomalies.SweepForSilence())
+                    {
                         await hub.Clients.All.SendAsync(HubEvents.AlertRaised, alert, stoppingToken);
+
+                        if (predictions.Suggest(alert) is { } suggestion)
+                            await hub.Clients.All.SendAsync(HubEvents.SuggestionReady, suggestion, stoppingToken);
+                    }
                 }
 
                 await hub.Clients.All.SendAsync(

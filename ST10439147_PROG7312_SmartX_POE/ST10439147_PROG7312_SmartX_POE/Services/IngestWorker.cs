@@ -17,6 +17,7 @@ public sealed class IngestWorker(
     IngestQueue queue,
     TelemetryStore store,
     AnomalyEngine anomalies,
+    PredictionService predictions,
     IHubContext<TelemetryHub> hub,
     ILogger<IngestWorker> logger) : BackgroundService
 {
@@ -52,7 +53,13 @@ public sealed class IngestWorker(
                 store.LogReading(sensor.Id, packet.Timestamp, packet.Value, packet.Sequence);
 
                 var alert = anomalies.Evaluate(sensor);
-                if (alert is not null) await hub.Clients.All.SendAsync(HubEvents.AlertRaised, alert, stoppingToken);
+                if (alert is null) continue;
+
+                await hub.Clients.All.SendAsync(HubEvents.AlertRaised, alert, stoppingToken);
+
+                // The same event has come round again: push what the operator usually does next.
+                if (predictions.Suggest(alert) is { } suggestion)
+                    await hub.Clients.All.SendAsync(HubEvents.SuggestionReady, suggestion, stoppingToken);
             }
             catch (OperationCanceledException)
             {

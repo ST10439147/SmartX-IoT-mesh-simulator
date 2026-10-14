@@ -9,24 +9,20 @@ public enum OperatorActionKind
 }
 
 /// <summary>
-/// One thing the operator did, and the alert that was on the rail when they did it.
-/// <see cref="Context"/> is the "after event X" half of a prediction pair, written as
-/// <c>Category|AlertKind</c> (e.g. <c>SoilMoisture|ThresholdBreach</c>) so a breach on any
-/// moisture probe counts as the same event. Null when nothing was alerting.
+/// One thing the operator did, and the faults that were open when they did it.
+/// Each entry in <see cref="Contexts"/> is an "after event X" half of a prediction pair,
+/// written as <c>Category|AlertKind</c> (e.g. <c>SoilMoisture|ThresholdBreach</c>) so a
+/// breach on any moisture probe counts as the same event. Empty when nothing was wrong.
 /// </summary>
 public sealed record OperatorAction(
     DateTimeOffset At,
     OperatorActionKind Kind,
     string Target,
-    string? Context,
-    string? ContextSensor)
+    IReadOnlyList<string> Contexts)
 {
     /// <summary>The "the operator did Y" half of the pair: <c>Search:pump</c>, <c>Command:Switch Borehole Pump on</c>.</summary>
     public string FollowUp => $"{Kind}:{Target}";
 }
-
-/// <summary>A follow-up to an event and how many times the operator has done it after that event.</summary>
-public sealed record RankedFollowUp(string FollowUp, int Count);
 
 /// <summary>
 /// The predictive action engine. Every search and command lands here with the alert
@@ -47,13 +43,17 @@ public sealed class PredictionService(TelemetryStore store, AnomalyEngine anomal
 {
     public const int MaxLog = 500;
 
+    /// <summary>How long a suggestion stays up after its alert was raised.</summary>
+    public static readonly TimeSpan SuggestionLifetime = TimeSpan.FromMinutes(2);
+
     /// <summary>
-    /// How recent an alert must be to count as the reason for an action. An alert from an
-    /// hour ago still on the rail is not why the operator searched just now.
+    /// A follow-up has to have happened this many times after an event before it is
+    /// suggested. One search could be a coincidence; two is the start of a habit.
     /// </summary>
-    public static readonly TimeSpan ContextWindow = TimeSpan.FromMinutes(2);
+    public const int MinOccurrences = 2;
 
     private readonly Queue<OperatorAction> _log = new();
+    private Suggestion? _latest;
     private readonly Dictionary<string, Dictionary<string, int>> _pairs = new(StringComparer.OrdinalIgnoreCase);
     private readonly Lock _gate = new();
 
@@ -86,21 +86,20 @@ public sealed class PredictionService(TelemetryStore store, AnomalyEngine anomal
                  .Take(top).Select(p => new RankedFollowUp(p.Key, p.Value)).ToList()
             : [];
     //----------------------------------------------------------------------------------------------------------------------//
-    /// <summary>Logs one action against whatever alert is driving the operator right now.</summary>
+    /// <summary>Logs one action against every fault that is open right now.</summary>
     public OperatorAction Record(OperatorActionKind kind, string target)
     {
-        var (context, sensor) = CurrentContext();
         // "Pump" and "pump " are the same search; command labels are generated, so already stable.
         target = kind == OperatorActionKind.Search ? target.Trim().ToLowerInvariant() : target;
-        var action = new OperatorAction(DateTimeOffset.UtcNow, kind, target, context, sensor);
+        var action = new OperatorAction(DateTimeOffset.UtcNow, kind, target, OpenContexts());
 
         lock (_gate)
         {
             _log.Enqueue(action);
             if (_log.Count > MaxLog) _log.Dequeue();
 
-            // "After event X, the operator did Y": one more for this pair. No alert, no pair.
-            if (context is not null)
+            // "After event X, the operator did Y": one more for each open X. Nothing open, no pair.
+            foreach (var context in action.Contexts)
             {
                 if (!_pairs.TryGetValue(context, out var row)) _pairs[context] = row = new(StringComparer.OrdinalIgnoreCase);
                 row[action.FollowUp] = row.GetValueOrDefault(action.FollowUp) + 1;
@@ -111,21 +110,60 @@ public sealed class PredictionService(TelemetryStore store, AnomalyEngine anomal
     }
     //----------------------------------------------------------------------------------------------------------------------//
     /// <summary>
-    /// The newest actionable alert inside <see cref="ContextWindow"/>. Suppressed alerts are
-    /// ones the operator has said they ignore, and a valve switching is normal operation,
-    /// so neither is treated as the cause of what the operator does next.
+    /// Event X has happened again: the follow-ups the operator has made a habit of after it,
+    /// or null when there is nothing worth suggesting yet. The result is also kept as
+    /// <see cref="Current"/> so a dashboard that opens mid-alert still gets it.
     /// </summary>
-    private (string? Context, string? Sensor) CurrentContext()
+    public Suggestion? Suggest(Alert alert)
     {
-        var since = DateTimeOffset.UtcNow - ContextWindow;
+        if (!Actionable(alert) || !store.TryGet(alert.SensorId, out var sensor)) return null;
 
-        var alert = anomalies.Ranked(includeSuppressed: false)
-            .Where(a => a.Kind != AlertKind.StateChange && a.RaisedAt >= since)
-            .MaxBy(a => a.RaisedAt);
+        var context = ContextKey(sensor, alert);
+        var habits = Rank(context).Where(f => f.Count >= MinOccurrences).ToList();
+        if (habits.Count == 0) return null;
 
-        if (alert is null || !store.TryGet(alert.SensorId, out var sensor)) return (null, null);
-
-        return ($"{sensor.Category}|{alert.Kind}", sensor.DisplayName);
+        var suggestion = new Suggestion(alert.Id, context, sensor.DisplayName, alert.RaisedAt, habits);
+        lock (_gate) _latest = suggestion;
+        return suggestion;
     }
+
+    /// <summary>The last suggestion made, while its alert is still recent enough to be driving the operator.</summary>
+    public Suggestion? Current
+    {
+        get
+        {
+            lock (_gate) return _latest is { } s && s.RaisedAt >= DateTimeOffset.UtcNow - SuggestionLifetime ? s : null;
+        }
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    /// <summary>
+    /// The faults still going on: nodes in the disconnect set, and spikes and breaches in
+    /// the open-error set. "Most recent alert" is the wrong question on a busy mesh - a
+    /// one-reading spike elsewhere lands seconds after the moisture alert and closes again
+    /// at once, while the moisture problem the operator is reacting to is still open.
+    /// Kinds the operator has suppressed are left out: they have said those are noise.
+    /// </summary>
+    private IReadOnlyList<string> OpenContexts()
+    {
+        var suppressed = anomalies.Ranked()
+            .Where(a => a.Suppressed)
+            .Select(a => $"{a.SensorId}|{a.Kind}")
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var open = anomalies.Disconnected.Select(id => $"{id}|{AlertKind.Silence}").Concat(anomalies.ActiveErrors);
+
+        var contexts = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var key in open.Where(k => !suppressed.Contains(k)))
+        {
+            var bar = key.IndexOf('|');
+            if (store.TryGet(key[..bar], out var sensor)) contexts.Add($"{sensor.Category}|{key[(bar + 1)..]}");
+        }
+
+        return contexts.ToList();
+    }
+
+    private static bool Actionable(Alert alert) => !alert.Suppressed && alert.Kind != AlertKind.StateChange;
+
+    private static string ContextKey(SensorRegistration sensor, Alert alert) => $"{sensor.Category}|{alert.Kind}";
 }
 //---------------------------DDDDDDDDDDDoooooooooooooo END OF FILE DDDDDDDDDDDoooooooooooooo---------------------------//

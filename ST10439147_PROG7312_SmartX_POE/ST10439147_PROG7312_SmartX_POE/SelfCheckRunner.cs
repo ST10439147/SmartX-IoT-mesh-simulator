@@ -397,18 +397,19 @@ internal static class SelfCheckRunner
             PublishIntervalSeconds = 2
         });
 
-        // Nothing alerting: the action is logged with no context.
-        Assert(predictions.Record(OperatorActionKind.Search, "valve").Context is null, "with no alert on the rail an action has no context");
+        // Nothing wrong: the action is logged with no context.
+        Assert(predictions.Record(OperatorActionKind.Search, "valve").Contexts.Count == 0, "with no fault open an action has no context");
 
-        // The probe goes silent, then the operator searches. The search is tied to that alert.
+        // The probe goes silent, then the operator searches. The search is tied to that open fault.
         var lastHeard = DateTimeOffset.UtcNow;
         store.Ingest(new TelemetryPacket<float>(probe.Id, 31f, probe.Category, lastHeard));
-        engine.SweepForSilence(lastHeard.AddSeconds(8));
+        var outage = engine.SweepForSilence(lastHeard.AddSeconds(8))[0];
 
         var search = predictions.Record(OperatorActionKind.Search, "  Pump ");
-        Assert(search.Context == "SoilMoisture|Silence" && search.ContextSensor == probe.DisplayName,
-            $"a search during a moisture outage should carry that alert, got '{search.Context}'");
+        Assert(search.Contexts.SequenceEqual(["SoilMoisture|Silence"]),
+            $"a search during a moisture outage should carry that fault, got '{string.Join(", ", search.Contexts)}'");
         Assert(search.FollowUp == "Search:pump", "search terms are normalised so 'Pump ' and 'pump' are one follow-up");
+        Assert(predictions.Suggest(outage) is null, "one search is not a habit yet, so nothing is suggested");
 
         var command = predictions.Record(OperatorActionKind.Command, "Switch Borehole Pump on");
         Assert(command.FollowUp == "Command:Switch Borehole Pump on", "command labels are kept as issued");
@@ -424,11 +425,27 @@ internal static class SelfCheckRunner
         Assert(predictions.Rank("TankLevel|Spike").Count == 0, "an event never seen has no follow-ups");
         Assert(predictions.Pairs.Keys.SequenceEqual(["SoilMoisture|Silence"]), "an action with no alert open forms no pair");
 
+        // The moisture alert comes round again: the pump is suggested on its own. The command,
+        // done only once, is below MinOccurrences and is left out.
+        var suggestion = predictions.Suggest(outage);
+        Assert(suggestion is { FollowUps.Count: 1 } && suggestion.FollowUps[0].FollowUp == "Search:pump",
+            "a repeated moisture-then-pump pattern should suggest the pump when the alert recurs");
+        Assert(predictions.Current == suggestion, "the latest suggestion is kept for a dashboard that opens mid-alert");
+        Assert(predictions.Suggest(outage with { Kind = AlertKind.Spike }) is null, "a different event has nothing learned to suggest");
+        Assert(predictions.Suggest(outage with { Suppressed = true }) is null, "a suppressed alert gets no suggestion");
+
+        // The node reports again, so the fault is closed: what the operator does now is not a reaction to it.
+        var back = DateTimeOffset.UtcNow;
+        store.Ingest(new TelemetryPacket<float>(probe.Id, 31f, probe.Category, back));
+        engine.SweepForSilence(back.AddSeconds(1));
+        Assert(predictions.Record(OperatorActionKind.Search, "pump").Contexts.Count == 0, "once the fault closes, actions are no longer tied to it");
+
         for (var i = 0; i < PredictionService.MaxLog; i++) predictions.Record(OperatorActionKind.Search, $"s{i}");
         Assert(predictions.Log.Count == PredictionService.MaxLog, "the log drops its oldest entries past the cap");
 
         log.Add("prediction log: every search and command is logged with the alert that was open at the time");
         log.Add("dictionary of counters: after-X-did-Y pairs are counted and the most frequent follow-up ranks first");
+        log.Add("suggestion: when a moisture alert recurs, the pump the operator keeps searching for is suggested");
         return log;
     }
     //----------------------------------------------------------------------------------------------------------------------//

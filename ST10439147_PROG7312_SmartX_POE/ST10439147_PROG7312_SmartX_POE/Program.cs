@@ -304,7 +304,13 @@ api.MapGet("/predictions/log", (PredictionService predictions) => predictions.Lo
 api.MapGet("/predictions/pairs", (PredictionService predictions) => predictions.Pairs);
 
 // The top follow-ups to one event, e.g. ?context=SoilMoisture|ThresholdBreach&top=3.
-api.MapGet("/predictions/rank", ([FromQuery] string context, PredictionService predictions, [FromQuery] int top = 3) =>
+// The suggestion for the alert that is driving the operator right now, so a dashboard
+// opened mid-alert still shows it. 204 when there is none. New ones are pushed as
+// HubEvents.SuggestionReady the moment their alert is raised.
+api.MapGet("/predictions/suggestion", (PredictionService predictions) =>
+    predictions.Current is { } suggestion ? Results.Ok(suggestion) : Results.NoContent());
+
+api.MapGet("/predictions/rank",([FromQuery] string context, PredictionService predictions, [FromQuery] int top = 3) =>
     predictions.Rank(context, Math.Clamp(top, 1, 20)));
 
 // Returns the typed packets themselves, so TelemetryPacket<T> is what crosses the wire

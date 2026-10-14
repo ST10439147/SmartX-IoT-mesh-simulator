@@ -316,6 +316,13 @@ footer.foot {
 .tag.info { color: var(--info); border-color: rgba(88, 166, 255, .4); background: rgba(88, 166, 255, .09); }
 .tag.ok   { color: var(--accent); border-color: rgba(47, 216, 164, .4); background: rgba(47, 216, 164, .09); }
 
+.suggestion {
+    border: 1px solid rgba(88, 166, 255, .4); background: rgba(88, 166, 255, .06);
+    border-radius: 6px; padding: .6rem .8rem; margin-bottom: .8rem;
+}
+.suggestion .hint { margin: 0 0 .4rem; display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.suggestion .actions { margin-top: 0; flex-wrap: wrap; align-items: center; }
+
 .suppressed-group {
     border: 1px dashed var(--line);
     border-radius: var(--radius-sm);

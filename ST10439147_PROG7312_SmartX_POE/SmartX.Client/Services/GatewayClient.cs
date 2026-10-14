@@ -177,6 +177,24 @@ public sealed class GatewayClient(HttpClient http)
         }
     }
 
+    // ---- predictive action engine ------------------------------------------
+
+    /// <summary>The suggestion for the alert driving the operator right now. Null when there is none or the gateway is down.</summary>
+    public async Task<Suggestion?> GetSuggestionAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var response = await http.GetAsync("api/predictions/suggestion", ct);
+            return response.StatusCode == System.Net.HttpStatusCode.OK
+                ? await response.Content.ReadFromJsonAsync<Suggestion>(SmartXJson.Options, ct)
+                : null;
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+    }
+
     // ---- timeline ----------------------------------------------------------
 
     /// <summary>One sensor's readings in timestamp order, oldest first. Null if the gateway could not be reached or the sensor is gone.</summary>
