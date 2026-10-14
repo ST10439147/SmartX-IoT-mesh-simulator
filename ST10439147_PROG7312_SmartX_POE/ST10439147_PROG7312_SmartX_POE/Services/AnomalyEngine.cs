@@ -30,7 +30,7 @@ namespace SmartX.Api.Services;
 /// alert has been raised before and is skipped.</para>
 /// </summary>
 // Reference [35]: The Independent Institute of Education (2026). PROG7312 Portfolio of Evidence Guide, Part 1. The IIE.
-public sealed class AnomalyEngine(TelemetryStore store, ILogger<AnomalyEngine> logger)
+public sealed class AnomalyEngine(TelemetryStore store, CommandService commands, ILogger<AnomalyEngine> logger)
 {
     /// <summary>Deviations beyond three sigma are the classic "this is not normal noise" line.</summary>
     // Reference [19]: Wikipedia. Standard score (z-score).
@@ -135,7 +135,11 @@ public sealed class AnomalyEngine(TelemetryStore store, ILogger<AnomalyEngine> l
                 previous, observed, 1);
         }
 
-        var history = window.Take(window.Count - 1).ToArray();
+        if (StoppedByOperator(sensor)) return null;
+
+        var history = RunningBaseline(sensor, window.Take(window.Count - 1));
+        if (history.Length < MinSamplesForBaseline) return null;
+
         var (mean, z) = ZScore(history, observed);
 
         var spikeKey = $"{sensor.Id}|{AlertKind.Spike}";
@@ -181,14 +185,27 @@ public sealed class AnomalyEngine(TelemetryStore store, ILogger<AnomalyEngine> l
     public AlertKind? Classify(SensorRegistration sensor, double value)
     {
         // An actuator flipping is normal operation (see Evaluate), never critical.
-        if (sensor.Payload == PayloadKind.Boolean) return null;
+        if (sensor.Payload == PayloadKind.Boolean || StoppedByOperator(sensor)) return null;
 
-        var history = store.Window(sensor.Id, 120);
-        if (history.Count >= MinSamplesForBaseline && ZScore(history, value).Z >= SpikeZScore)
+        var history = RunningBaseline(sensor, store.Window(sensor.Id, 120));
+        if (history.Length >= MinSamplesForBaseline && ZScore(history, value).Z >= SpikeZScore)
             return AlertKind.Spike;
 
         return value > sensor.WarningThreshold ? AlertKind.ThresholdBreach : null;
     }
+    //----------------------------------------------------------------------------------------------------------------------//
+    /// <summary>A pump the operator switched off reads 0 W because it was told to - that is not a fault.</summary>
+    private bool StoppedByOperator(SensorRegistration sensor)
+        => sensor.Category == SensorCategory.PumpPower && commands.TryGetOverride(sensor.Id, out var running) && !running;
+
+    /// <summary>
+    /// The readings a spike is measured against. A pump's 0 W readings are time it spent
+    /// stopped, not its running load; left in, they drag the mean down and restarting the
+    /// pump looks like a spike. Only the history is filtered - a pump that drops to 0 W
+    /// without being told to still stands out against it.
+    /// </summary>
+    private static double[] RunningBaseline(SensorRegistration sensor, IEnumerable<double> history)
+        => sensor.Category == SensorCategory.PumpPower ? history.Where(v => v > 0).ToArray() : history.ToArray();
     //----------------------------------------------------------------------------------------------------------------------//
     private static (double Mean, double Z) ZScore(IReadOnlyCollection<double> history, double observed)
     {

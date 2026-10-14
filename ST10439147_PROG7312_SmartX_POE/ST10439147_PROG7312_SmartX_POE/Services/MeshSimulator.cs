@@ -185,6 +185,10 @@ public sealed class MeshSimulator(
                 case PayloadKind.Integer:
                 {
                     var value = (int)Math.Round(node.NextFloat(_random, spiking));
+
+                    // A pump commanded off draws nothing until the override is undone;
+                    // commanded on, or left alone, it runs at its usual load.
+                    if (commands.TryGetOverride(sensor.Id, out var running) && !running) value = 0;
                     await Post(sensor.Id, value, at, token);
                     break;
                 }
@@ -220,6 +224,7 @@ public sealed class MeshSimulator(
         Add("A4:CF:12:9B:04:7E", "Soil Moisture North", "Facility A/Zone 1/Sub-Zone A", SensorCategory.SoilMoisture, 2, 31, 2.5);
         Add("A4:CF:12:9B:04:7F", "Soil Moisture South", "Facility A/Zone 1/Sub-Zone A", SensorCategory.SoilMoisture, 2, 28, 2.5);
         Add("DC:A6:32:77:11:01", "Drip Line Valve A", "Facility A/Zone 1/Sub-Zone A", SensorCategory.IrrigationValve, 4);
+        Add("DC:A6:32:77:11:03", "Drip Line Valve B", "Facility A/Zone 1/Sub-Zone A", SensorCategory.IrrigationValve, 4);
 
         // Greenhouse
         Add("A4:CF:12:9B:05:10", "Greenhouse Humidity", "Facility A/Zone 1/Sub-Zone B", SensorCategory.RelativeHumidity, 3, 62, 4.0);

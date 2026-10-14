@@ -34,7 +34,7 @@ dotnet build ST10439147_PROG7312_SmartX_POE.slnx -c Release
 dotnet run --project ST10439147_PROG7312_SmartX_POE --launch-profile http
 ```
 
-Then open **<http://localhost:5036>**. The mesh simulator seeds 12 nodes and starts
+Then open **<http://localhost:5036>**. The mesh simulator seeds 13 nodes and starts
 publishing immediately, so the dashboard has live data within a second or two.
 
 For HTTPS instead, use `--launch-profile https` and open <https://localhost:7030>
@@ -106,6 +106,7 @@ SmartX self-check
   ok  uploads: magic-byte sniffing, text validation and path-traversal stripping
   ok  queue: FIFO for normal packets, criticals jump the line, a full lane sheds load
   ok  stack: commands undo last-in-first-out, a batch reverts as one, empty undo is safe
+  ok  pump override: a commanded stop and restart raise nothing, an unexpected stop still alerts
 ----------------------------------------------------------------
 all checks passed
 ```
@@ -217,7 +218,8 @@ backlog delays live readings enough to raise false "silent node" alerts.
 
 ### Stack: manual override commands and Undo
 
-A manual override pins an actuator (valve or vent) on or off. Each command is pushed onto
+A manual override pins an actuator (valve, vent or pump) on or off; a pump pinned off
+reports 0 W until the command is undone. Each command is pushed onto
 a `Stack<T>`; Undo pops the most recent one and puts every device it touched back the way
 it was.
 
@@ -225,12 +227,16 @@ it was.
 
 1. Click **On** next to *Drip Line Valve A*. It shows *pinned on* and, within a few
    seconds, reads OPEN.
-2. Click **Shut all valves**. The valve shows *pinned off* and reads SHUT. The history on
-   the right now lists two commands, the newest tagged *next undo*.
-3. Click **Undo last command**. The valve goes back to *pinned on* - the state before
-   "shut all valves" - not merely to automatic.
-4. Click **Undo last command** again. The valve returns to *auto*, the history is empty
+2. Click **Shut all valves**. Both *Drip Line Valve A* and *Drip Line Valve B* show
+   *pinned off* and read SHUT. The history on the right now lists two commands, the
+   newest tagged *next undo*.
+3. Click **Undo last command**. Each valve goes back to what it was before "shut all
+   valves": A to *pinned on*, B to *auto*.
+4. Click **Undo last command** again. Valve A returns to *auto*, the history is empty
    and the Undo button is disabled.
+
+Pumps work the same way: **Off** next to *Borehole Pump* makes it read STOPPED (0 W), and
+Undo starts it again. A stop the operator ordered is not reported as an anomaly.
 
 **With curl:**
 
@@ -251,7 +257,8 @@ curl -X POST http://localhost:5036/api/commands/undo
 ```
 
 `GET /api/commands` returns `history` (newest first, the order Undo takes them in) and
-`overrides` (which actuators are pinned right now). Each undo returns the command it
+`overrides` (which actuators are pinned right now); `GET /api/commands/history` returns
+the history list alone. Each undo returns the command it
 reverted; once the stack is empty it answers `409` with `"Nothing to undo."` rather than
 failing. Commanding a sensor that is not an actuator returns `400`.
 
@@ -534,7 +541,7 @@ HTTP telemetry endpoint; the simulator calls `TelemetryStore.Ingest` directly, s
 broker would plug in at that one call and nothing downstream changes.
 
 Gateway state is **in memory** and resets on restart: registered nodes, history and alerts
-are lost, and the 12 seeded nodes come back. Uploaded files stay on disk, encrypted, but
+are lost, and the 13 seeded nodes come back. Uploaded files stay on disk, encrypted, but
 their metadata is in memory too, so after a restart the API no longer lists or serves
 them. Persistence, the command stream and mesh routing arrive in Part 2 and the final PoE.
 

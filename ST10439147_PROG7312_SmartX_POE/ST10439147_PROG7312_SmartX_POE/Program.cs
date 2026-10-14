@@ -228,6 +228,9 @@ api.MapGet("/commands", (CommandService commands) => Results.Ok(new
     overrides = commands.Overrides
 }));
 
+// Just the undo stack, newest command first.
+api.MapGet("/commands/history", (CommandService commands) => Results.Ok(commands.History));
+
 // Pins one actuator (sensorId) or every actuator of a kind (category) on or off.
 // "Shut all valves" is { "category": "IrrigationValve", "state": false }.
 api.MapPost("/commands", (CommandRequest request, TelemetryStore store, CommandService commands) =>
@@ -251,8 +254,9 @@ api.MapPost("/commands", (CommandRequest request, TelemetryStore store, CommandS
     }
 
     // Only actuators take an on/off command - a moisture probe has nothing to switch.
-    if (targets.Count == 0 || targets.Any(s => s.Payload != PayloadKind.Boolean))
-        return Results.BadRequest(new { message = "Override commands only apply to registered actuators (valves, vents)." });
+    // A pump counts: it reports the power it draws, but it can still be started and stopped.
+    if (targets.Count == 0 || targets.Any(s => s.Payload != PayloadKind.Boolean && s.Category != SensorCategory.PumpPower))
+        return Results.BadRequest(new { message = "Override commands only apply to registered actuators (valves, vents, pumps)." });
 
     var action = request.State ? "on" : "off";
     var label = request.SensorId is not null
