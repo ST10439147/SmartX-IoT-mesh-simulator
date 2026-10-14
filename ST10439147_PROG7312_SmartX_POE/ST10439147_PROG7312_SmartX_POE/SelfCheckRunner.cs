@@ -202,6 +202,39 @@ internal static class SelfCheckRunner
         Assert(!commands.TryUndo(out _) && commands.History.Count == 0, "the stack is empty again");
 
         log.Add("stack: commands undo last-in-first-out, a batch reverts as one, empty undo is safe");
+
+        // A commanded pump stop and the restart after Undo are not anomalies; an
+        // uncommanded drop to 0 W still is.
+        var store = new TelemetryStore();
+        var engine = new AnomalyEngine(store, commands, NullLogger<AnomalyEngine>.Instance);
+        var pump = store.Register(new SensorRegistration
+        {
+            MacAddress = "B8:27:EB:41:02:AA",
+            DisplayName = "Borehole Pump",
+            DeploymentPath = "Facility A/Zone 2/Sub-Zone C",
+            Category = SensorCategory.PumpPower,
+            WarningThreshold = 3000
+        });
+        var at = DateTimeOffset.UtcNow;
+        void Read(int watts) => store.Ingest(new TelemetryPacket<int>(pump.Id, watts, pump.Category, at = at.AddSeconds(2)));
+
+        for (var i = 0; i < 30; i++) Read(2200 + i % 5 * 40);
+
+        commands.Issue("stop pump", [pump.Id], false);
+        for (var i = 0; i < 10; i++)
+        {
+            Read(0);
+            Assert(engine.Evaluate(pump) is null, "a pump stopped by the operator must not raise an alert");
+        }
+
+        commands.TryUndo(out _);
+        Read(2210);
+        Assert(engine.Evaluate(pump) is null, "restarting the pump must not look like a spike against its stopped readings");
+
+        Read(0);
+        Assert(engine.Evaluate(pump)?.Kind == AlertKind.Spike, "a pump dropping to 0 W on its own is still a spike");
+
+        log.Add("pump override: a commanded stop and restart raise nothing, an unexpected stop still alerts");
         return log;
     }
     //----------------------------------------------------------------------------------------------------------------------//
@@ -280,7 +313,7 @@ internal static class SelfCheckRunner
     {
         var log = new List<string>();
         var store = new TelemetryStore();
-        var engine = new AnomalyEngine(store, NullLogger<AnomalyEngine>.Instance);
+        var engine = new AnomalyEngine(store, new CommandService(), NullLogger<AnomalyEngine>.Instance);
 
         var probe = store.Register(new SensorRegistration
         {
