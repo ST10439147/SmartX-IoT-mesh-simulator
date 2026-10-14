@@ -45,6 +45,43 @@
     </div>
 }
 
+@* ------------------------------------------------------------ operator search *@
+<section class="panel" style="margin-bottom:1rem">
+    <div class="panel-head">
+        <h2>Search</h2>
+        <span class="count">name, id, deployment path or category</span>
+    </div>
+
+    <form class="form-grid" @onsubmit="SearchAsync">
+        <div class="field">
+            <label for="search-term">Find a device</label>
+            <input id="search-term" type="search" @bind="_searchTerm" placeholder="pump" />
+        </div>
+    </form>
+
+    <div class="actions">
+        <button @onclick="SearchAsync" disabled="@string.IsNullOrWhiteSpace(_searchTerm)">Search</button>
+    </div>
+
+    @if (_searchResults is { Count: > 0 })
+    {
+        <div class="sensor-grid" style="margin-top:.8rem">
+            @foreach (var sensor in _searchResults)
+            {
+                <button class="tile @TileClass(sensor)" @onclick="() => SelectSensor(sensor)">
+                    <div class="name">@sensor.DisplayName</div>
+                    <div class="path">@sensor.DeploymentPath</div>
+                    <div class="reading">@Reading(sensor)<span class="unit">@sensor.Unit</span></div>
+                </button>
+            }
+        </div>
+    }
+    else if (_searchResults is not null)
+    {
+        <p class="hint" style="margin-top:.5rem">No device matches "@_searchedFor".</p>
+    }
+</section>
+
 <div class="dash">
 
     @* ------------------------------------------------------------ severity-ranked rail *@
@@ -679,6 +716,10 @@
     private CommandLog? _commands;
     private List<SensorSnapshot> _actuators = [];
 
+    private string _searchTerm = string.Empty;
+    private string _searchedFor = string.Empty;
+    private IReadOnlyList<SensorSnapshot>? _searchResults;   // null until the first search
+
     private RegistryStatus? _registry;
     private string _registryKey = string.Empty;
     private SensorSnapshot? _registryHit;
@@ -847,6 +888,17 @@
 
     private async Task AggregateAsync()
         => _aggregate = await Gateway.AggregateAsync(_aggregateA, _aggregateB);
+
+    private async Task SearchAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_searchTerm)) return;
+
+        _searchedFor = _searchTerm.Trim();
+        _searchResults = await Gateway.SearchAsync(_searchedFor);
+
+        // One hit is the device the operator wanted, so open it straight away.
+        if (_searchResults.Count == 1) await SelectSensor(_searchResults[0]);
+    }
 
     private async Task RefreshRegistryAsync() => _registry = await Gateway.GetRegistryAsync() ?? _registry;
 

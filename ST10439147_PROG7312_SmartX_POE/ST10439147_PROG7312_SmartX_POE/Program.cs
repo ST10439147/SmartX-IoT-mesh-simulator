@@ -80,7 +80,22 @@ api.MapGet("/sensors/{id}", (string id, TelemetryStore store) =>
         ? Results.Ok(store.Snapshot(sensor))
         : Results.NotFound(new { message = $"No sensor registered with id '{id}'." }));
 
-api.MapGet("/sensors/{id}/profile", (string id, TelemetryStore store) =>
+// Operator search: case-insensitive substring over name, id, deployment path and category.
+// It runs on the gateway rather than filtering in the browser so every search is an event
+// the gateway sees - the predictive engine learns from them.
+api.MapGet("/search", ([FromQuery] string? q, TelemetryStore store) =>
+{
+    if (string.IsNullOrWhiteSpace(q)) return Results.BadRequest(new { message = "Give a search term (q)." });
+
+    var term = q.Trim();
+    return Results.Ok(store.Snapshots().Where(s =>
+        s.DisplayName.Contains(term, StringComparison.OrdinalIgnoreCase)
+        || s.Id.Contains(term, StringComparison.OrdinalIgnoreCase)
+        || s.DeploymentPath.Contains(term, StringComparison.OrdinalIgnoreCase)
+        || s.Category.Spec().Label.Contains(term, StringComparison.OrdinalIgnoreCase)).ToList());
+});
+
+api.MapGet("/sensors/{id}/profile",(string id, TelemetryStore store) =>
     store.TryGet(id, out var sensor) ? Results.Ok(sensor) : Results.NotFound());
 
 // Reference [17]: Microsoft. Handle errors in ASP.NET Core - problem details / ValidationProblem. Microsoft Learn.

@@ -161,6 +161,22 @@ public sealed class GatewayClient(HttpClient http)
             : null;
     }
 
+    // ---- search ------------------------------------------------------------
+
+    /// <summary>Devices whose name, id, path or category contains the term. Empty if the gateway could not be reached.</summary>
+    public async Task<IReadOnlyList<SensorSnapshot>> SearchAsync(string term, CancellationToken ct = default)
+    {
+        try
+        {
+            return await http.GetFromJsonAsync<List<SensorSnapshot>>(
+                $"api/search?q={Uri.EscapeDataString(term)}", SmartXJson.Options, ct) ?? [];
+        }
+        catch (HttpRequestException)
+        {
+            return [];
+        }
+    }
+
     // ---- timeline ----------------------------------------------------------
 
     /// <summary>One sensor's readings in timestamp order, oldest first. Null if the gateway could not be reached or the sensor is gone.</summary>
