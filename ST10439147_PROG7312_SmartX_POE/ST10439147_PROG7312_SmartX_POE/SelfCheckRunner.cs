@@ -43,6 +43,9 @@ internal static class SelfCheckRunner
 
             foreach (var line in RunDisconnectChecks())
                 Console.WriteLine($"  ok  {line}");
+
+            foreach (var line in RunPredictionLogChecks())
+                Console.WriteLine($"  ok  {line}");
         }
         catch (Exception ex)
         {
@@ -375,6 +378,46 @@ internal static class SelfCheckRunner
         Assert(Send(40f) is null && !engine.ActiveErrors.Contains(breachKey), "back under the threshold, the error state is cleared");
 
         log.Add("hash set: a silent node raises one disconnect alert, an open error state is not raised twice");
+        return log;
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    private static IEnumerable<string> RunPredictionLogChecks()
+    {
+        var log = new List<string>();
+        var store = new TelemetryStore();
+        var engine = new AnomalyEngine(store, new CommandService(), NullLogger<AnomalyEngine>.Instance);
+        var predictions = new PredictionService(store, engine);
+
+        var probe = store.Register(new SensorRegistration
+        {
+            MacAddress = "A4:CF:12:9B:04:7F",
+            DisplayName = "Soil Moisture South",
+            DeploymentPath = "Facility A/Zone 1/Sub-Zone B",
+            Category = SensorCategory.SoilMoisture,
+            PublishIntervalSeconds = 2
+        });
+
+        // Nothing alerting: the action is logged with no context.
+        Assert(predictions.Record(OperatorActionKind.Search, "valve").Context is null, "with no alert on the rail an action has no context");
+
+        // The probe goes silent, then the operator searches. The search is tied to that alert.
+        var lastHeard = DateTimeOffset.UtcNow;
+        store.Ingest(new TelemetryPacket<float>(probe.Id, 31f, probe.Category, lastHeard));
+        engine.SweepForSilence(lastHeard.AddSeconds(8));
+
+        var search = predictions.Record(OperatorActionKind.Search, "  Pump ");
+        Assert(search.Context == "SoilMoisture|Silence" && search.ContextSensor == probe.DisplayName,
+            $"a search during a moisture outage should carry that alert, got '{search.Context}'");
+        Assert(search.FollowUp == "Search:pump", "search terms are normalised so 'Pump ' and 'pump' are one follow-up");
+
+        var command = predictions.Record(OperatorActionKind.Command, "Switch Borehole Pump on");
+        Assert(command.FollowUp == "Command:Switch Borehole Pump on", "command labels are kept as issued");
+        Assert(predictions.Log[0] == command && predictions.Log.Count == 3, "the log is newest first and holds every action");
+
+        for (var i = 0; i < PredictionService.MaxLog; i++) predictions.Record(OperatorActionKind.Search, $"s{i}");
+        Assert(predictions.Log.Count == PredictionService.MaxLog, "the log drops its oldest entries past the cap");
+
+        log.Add("prediction log: every search and command is logged with the alert that was open at the time");
         return log;
     }
     //----------------------------------------------------------------------------------------------------------------------//

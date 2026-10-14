@@ -35,6 +35,7 @@ builder.Services.AddSingleton<AnomalyEngine>();
 builder.Services.AddSingleton<AttachmentService>();
 builder.Services.AddSingleton<IngestQueue>();
 builder.Services.AddSingleton<CommandService>();
+builder.Services.AddSingleton<PredictionService>();
 // Reference [23]: Microsoft. Background tasks with hosted services in ASP.NET Core. Microsoft Learn.
 //   https://learn.microsoft.com/aspnet/core/fundamentals/host/hosted-services
 builder.Services.AddHostedService<IngestWorker>();
@@ -83,11 +84,13 @@ api.MapGet("/sensors/{id}", (string id, TelemetryStore store) =>
 // Operator search: case-insensitive substring over name, id, deployment path and category.
 // It runs on the gateway rather than filtering in the browser so every search is an event
 // the gateway sees - the predictive engine learns from them.
-api.MapGet("/search", ([FromQuery] string? q, TelemetryStore store) =>
+api.MapGet("/search", ([FromQuery] string? q, TelemetryStore store, PredictionService predictions) =>
 {
     if (string.IsNullOrWhiteSpace(q)) return Results.BadRequest(new { message = "Give a search term (q)." });
 
     var term = q.Trim();
+    predictions.Record(OperatorActionKind.Search, term);
+
     return Results.Ok(store.Snapshots().Where(s =>
         s.DisplayName.Contains(term, StringComparison.OrdinalIgnoreCase)
         || s.Id.Contains(term, StringComparison.OrdinalIgnoreCase)
@@ -248,7 +251,7 @@ api.MapGet("/commands/history", (CommandService commands) => Results.Ok(commands
 
 // Pins one actuator (sensorId) or every actuator of a kind (category) on or off.
 // "Shut all valves" is { "category": "IrrigationValve", "state": false }.
-api.MapPost("/commands", (CommandRequest request, TelemetryStore store, CommandService commands) =>
+api.MapPost("/commands", (CommandRequest request, TelemetryStore store, CommandService commands, PredictionService predictions) =>
 {
     List<SensorRegistration> targets;
 
@@ -278,13 +281,24 @@ api.MapPost("/commands", (CommandRequest request, TelemetryStore store, CommandS
         ? $"Switch {targets[0].DisplayName} {action}"
         : $"Switch all {targets[0].Category.Spec().Label} devices {action}";
 
-    return Results.Ok(commands.Issue(label, targets.Select(s => s.Id), request.State));
+    var command = commands.Issue(label, targets.Select(s => s.Id), request.State);
+    predictions.Record(OperatorActionKind.Command, label);
+    return Results.Ok(command);
 });
 
-api.MapPost("/commands/undo", (CommandService commands) =>
-    commands.TryUndo(out var undone)
-        ? Results.Ok(undone)
-        : Results.Conflict(new { message = "Nothing to undo." }));
+api.MapPost("/commands/undo", (CommandService commands, PredictionService predictions) =>
+{
+    if (!commands.TryUndo(out var undone)) return Results.Conflict(new { message = "Nothing to undo." });
+
+    predictions.Record(OperatorActionKind.Command, $"Undo {undone!.Label}");
+    return Results.Ok(undone);
+});
+
+// ---------------------------------------------------------------- predictive action engine
+
+// Every search and command, newest first, with the alert (Category|AlertKind) that was
+// on the rail when it was made. A null context means nothing was alerting.
+api.MapGet("/predictions/log", (PredictionService predictions) => predictions.Log);
 
 // Returns the typed packets themselves, so TelemetryPacket<T> is what crosses the wire
 // rather than a flattened DTO. The client deserialises straight back into the same type.
