@@ -300,6 +300,13 @@ api.MapPost("/commands/undo", (CommandService commands, PredictionService predic
 // on the rail when it was made. A null context means nothing was alerting.
 api.MapGet("/predictions/log", (PredictionService predictions) => predictions.Log);
 
+// The dictionary of counters: every event seen, each with its follow-ups ranked.
+api.MapGet("/predictions/pairs", (PredictionService predictions) => predictions.Pairs);
+
+// The top follow-ups to one event, e.g. ?context=SoilMoisture|ThresholdBreach&top=3.
+api.MapGet("/predictions/rank", ([FromQuery] string context, PredictionService predictions, [FromQuery] int top = 3) =>
+    predictions.Rank(context, Math.Clamp(top, 1, 20)));
+
 // Returns the typed packets themselves, so TelemetryPacket<T> is what crosses the wire
 // rather than a flattened DTO. The client deserialises straight back into the same type.
 api.MapGet("/sensors/{id}/history", (string id, TelemetryStore store, [FromQuery] int samples = 120) =>

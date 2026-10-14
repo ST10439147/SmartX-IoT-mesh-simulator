@@ -414,10 +414,21 @@ internal static class SelfCheckRunner
         Assert(command.FollowUp == "Command:Switch Borehole Pump on", "command labels are kept as issued");
         Assert(predictions.Log[0] == command && predictions.Log.Count == 3, "the log is newest first and holds every action");
 
+        // The pattern repeats: more pump searches under the same alert. Pump outranks the command.
+        predictions.Record(OperatorActionKind.Search, "pump");
+        predictions.Record(OperatorActionKind.Search, "PUMP");
+        var ranked = predictions.Rank("SoilMoisture|Silence");
+        Assert(ranked.Count == 2 && ranked[0] == new RankedFollowUp("Search:pump", 3) && ranked[1].Count == 1,
+            $"pump searched three times should rank first, got {string.Join(", ", ranked)}");
+        Assert(predictions.Rank("SoilMoisture|Silence", top: 1).Count == 1, "top limits the ranking");
+        Assert(predictions.Rank("TankLevel|Spike").Count == 0, "an event never seen has no follow-ups");
+        Assert(predictions.Pairs.Keys.SequenceEqual(["SoilMoisture|Silence"]), "an action with no alert open forms no pair");
+
         for (var i = 0; i < PredictionService.MaxLog; i++) predictions.Record(OperatorActionKind.Search, $"s{i}");
         Assert(predictions.Log.Count == PredictionService.MaxLog, "the log drops its oldest entries past the cap");
 
         log.Add("prediction log: every search and command is logged with the alert that was open at the time");
+        log.Add("dictionary of counters: after-X-did-Y pairs are counted and the most frequent follow-up ranks first");
         return log;
     }
     //----------------------------------------------------------------------------------------------------------------------//
