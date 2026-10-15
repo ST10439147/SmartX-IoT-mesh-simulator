@@ -37,7 +37,7 @@ public sealed record OperatorAction(
 // The counters are not capped and outlive the log. Persist both if predictions have to survive a restart.
 // ponytail: an action counts every time it is made, so searching "pump" twice during one alert
 // counts twice. Count once per alert id if repeat clicks start skewing the ranking.
-// Reference: Microsoft. Dictionary<TKey,TValue> Class. Microsoft Learn.
+// Reference [36]: Microsoft. Dictionary<TKey,TValue> Class. Microsoft Learn.
 //   https://learn.microsoft.com/dotnet/api/system.collections.generic.dictionary-2
 public sealed class PredictionService(TelemetryStore store, AnomalyEngine anomalies)
 {
@@ -182,8 +182,10 @@ public sealed class PredictionService(TelemetryStore store, AnomalyEngine anomal
     /// </summary>
     // ponytail: least squares is pulled about by a single spike in the window; the fit gate
     // catches most of that. Switch to Theil-Sen (median of pairwise slopes) if spikes still leak through.
-    // Reference: Wikipedia. Simple linear regression.
+    // Reference [37]: Wikipedia. Simple linear regression.
     //   https://en.wikipedia.org/wiki/Simple_linear_regression
+    // Reference [38]: Wikipedia. Coefficient of determination.
+    //   https://en.wikipedia.org/wiki/Coefficient_of_determination
     public IReadOnlyList<TrendFlag> TrendFlags()
     {
         var silent = anomalies.Disconnected.ToHashSet(StringComparer.OrdinalIgnoreCase);

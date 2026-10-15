@@ -107,6 +107,13 @@ SmartX self-check
   ok  queue: FIFO for normal packets, criticals jump the line, a full lane sheds load
   ok  stack: commands undo last-in-first-out, a batch reverts as one, empty undo is safe
   ok  pump override: a commanded stop and restart raise nothing, an unexpected stop still alerts
+  ok  dictionary: a device is found by id or by MAC in any spelling, misses are counted
+  ok  sorted dictionary: out-of-order packets read back in time order, the log stays bounded
+  ok  hash set: a silent node raises one disconnect alert, an open error state is not raised twice
+  ok  prediction log: every search and command is logged with the alert that was open at the time
+  ok  dictionary of counters: after-X-did-Y pairs are counted and the most frequent follow-up ranks first
+  ok  suggestion: when a moisture alert recurs, the pump the operator keeps searching for is suggested
+  ok  trend: a least-squares line flags a device climbing toward its threshold and when it will cross
 ----------------------------------------------------------------
 all checks passed
 ```
@@ -416,6 +423,163 @@ disconnect alert, then holds a reading over its threshold and asserts it is rais
 
 ---
 
+## Testing the predictive action engine
+
+The console learns from what the operator actually does. Every search and every override
+command is logged with the faults that were open at that moment, and the gateway counts
+"after event X, the operator did Y" pairs. When X happens again, the follow-ups the
+operator has made a habit of are on screen before they type anything. Separately, devices
+still under their threshold but climbing toward it are flagged with an estimate of when
+they will cross.
+
+### How it learns
+
+`PredictionService` keeps a dictionary of counters,
+`Dictionary<string, Dictionary<string, int>>`:
+
+- **Event X** is an open fault, written `Category|AlertKind` - for example
+  `SoilMoisture|Silence` or `SoilMoisture|ThresholdBreach`. It is keyed by category, not
+  by device, so an outage on either moisture probe teaches the same lesson.
+- **Follow-up Y** is what the operator did: `Search:pump` or
+  `Command:Switch Borehole Pump on`. Search terms are trimmed and lower-cased, so `Pump `
+  and `pump` are one follow-up.
+
+Recording an action is two hash lookups and an increment. Ranking an event's follow-ups
+sorts only that event's row - the handful of things operators do in response to it - most
+frequent first, ties broken by name so the order is stable.
+
+The context is the set of faults *still open*, read from the disconnect set and the open
+error states described above, not "the newest alert". On a busy mesh a one-reading spike
+elsewhere lands seconds after the moisture alert and closes again at once, while the
+moisture problem the operator is actually reacting to is still open. An action taken with
+several faults open counts once against each. Kinds the operator has suppressed are left
+out - they have said those are noise - and an action with nothing open forms no pair.
+
+When an alert is raised, the gateway looks up its event and pushes a suggestion over
+SignalR (`suggestionReady`) holding every follow-up seen at least **twice** after it. One
+search could be coincidence; two is the start of a habit. A suggestion stays up for two
+minutes after its alert, and `GET /api/predictions/suggestion` returns it to a dashboard
+that opens mid-alert.
+
+### Suggest the pump after a moisture alert
+
+This is the scenario the feature is built around: repeat a pattern a few times, and the
+next time the event happens the console suggests the follow-up on its own.
+
+**On the dashboard** (panel: *Search*, top of the page; *Disconnect set* lower down):
+
+1. In *Disconnect set*, pick **Soil Moisture South** and click **Unplug for 60 s**. Wait
+   for its *Silence* alert to appear on the rail (about ten seconds).
+2. In *Search*, type `pump` and press Enter.
+3. Click **Plug back in** and wait a few seconds for the node to leave the set.
+4. Repeat steps 1-3 once more. The pattern has now been seen twice.
+5. Unplug **Soil Moisture South** a third time and do **not** search. When the *Silence*
+   alert arrives, a **Suggested next** strip appears in the *Search* panel:
+   *Soil moisture silence on Soil Moisture South. After this alert you have usually:*
+   **Search "pump" ×2**.
+6. Click the chip. It runs the search, and that search is logged like any other, so the
+   count goes up to 3. Taking a suggestion reinforces it.
+
+**With curl:**
+
+```bash
+curl -X POST "http://localhost:5036/api/sensors/A4:CF:12:9B:04:7F/unplug?seconds=60"
+```
+
+Wait about ten seconds for the *Silence* alert, then search:
+
+```bash
+curl "http://localhost:5036/api/search?q=pump"
+```
+
+Plug the node back in:
+
+```bash
+curl -X POST "http://localhost:5036/api/sensors/A4:CF:12:9B:04:7F/unplug?seconds=0"
+```
+
+Run those three once more, then see what has been learned:
+
+```bash
+curl http://localhost:5036/api/predictions/pairs
+```
+
+```json
+{"SoilMoisture|Silence":[{"followUp":"Search:pump","count":2}]}
+```
+
+Unplug the node a third time, wait for the alert, and read the suggestion:
+
+```bash
+curl http://localhost:5036/api/predictions/suggestion
+```
+
+The response has `"context": "SoilMoisture|Silence"` and `Search:pump` in `followUps`.
+`GET /api/predictions/log` shows each action with the `contexts` it was counted against,
+and `GET /api/predictions/rank?context=SoilMoisture%7CSilence` returns one event's ranking
+(`%7C` is the `|`).
+
+Search suggestions are clickable. Command suggestions are shown as labels to issue from
+*Manual override*, because a label alone does not say which devices the command targeted.
+
+### Trend flags: devices heading for their threshold
+
+A threshold alert fires once a reading is already over the line. A trend flag fires
+before that, while there is still time to act. For each device that reports a level
+(valves and vents report a state, so they are skipped), the gateway fits a least-squares
+line through its last 30 readings. The slope is the rate of climb; where the line meets
+the warning threshold is when the device will cross if nothing changes. A device is
+flagged when all of these hold:
+
+- the line is rising and the device is still under its threshold - over it, it is a
+  breach, not a trend;
+- the line fits the readings well (R² of at least 0.6), so noise wandering about a flat
+  baseline is not mistaken for a climb;
+- the projected crossing is less than three minutes away.
+
+Silent nodes are skipped because their readings are stale, and a pump's 0 W readings
+(time spent stopped) are left out, the same rule the anomaly baseline uses. The 30
+samples, the three-minute horizon and the 0.6 fit are constants at the top of
+`PredictionService`, so they can be tuned without touching the maths.
+
+The simulated mesh never climbs on its own, so a test trigger makes one node drift
+upward on top of its normal signal.
+
+**On the dashboard:** start the drift with the curl command below. Within about half a
+minute a **Trending** strip appears in the *Search* panel, for example
+*Soil Moisture North: 38.83 → 45%VWC in ~36s*, and the countdown falls as the reading
+climbs. Click it to open the node in the inspector.
+
+**With curl:**
+
+```bash
+curl -X POST "http://localhost:5036/api/sensors/A4:CF:12:9B:04:7E/drift"
+```
+
+Left without `perSecond`, the rate is set so the node reaches its threshold in about 90
+seconds. Watch the projection:
+
+```bash
+curl http://localhost:5036/api/predictions/trends
+```
+
+Stop the climb and put the node back where it started:
+
+```bash
+curl -X POST "http://localhost:5036/api/sensors/A4:CF:12:9B:04:7E/drift?perSecond=0"
+```
+
+A steep ramp is also a large deviation from the node's own history, so the spike detector
+may raise a *Spike* on it partway through the climb. That is expected.
+
+The self-check's last four lines cover the engine: actions logged with the faults open at
+the time, the most frequent follow-up ranking first, the pump suggested once the moisture
+pattern repeats (and nothing suggested after a single search, for a different event or
+for a suppressed alert), and a trend flagged only for a steady climb close to its
+threshold, at the crossing time the line predicts.
+
+---
+
 ## Architecture
 
 ```
@@ -449,6 +613,7 @@ DTO translation layer and no chance of the two sides drifting.
 | **Dictionary** | `TelemetryStore` keeps the device registry in a `ConcurrentDictionary<string, SensorRegistration>` keyed by canonical MAC. `TryGet` is the lookup every packet arrival goes through, by MAC or id, and it counts lookups and misses for `GET /api/registry`. The concurrent variant is used because request threads and the ingest worker read it at the same time. |
 | **SortedDictionary** | `TelemetryStore` keeps a `SortedDictionary<DateTimeOffset, TimelinePoint>` per sensor, keyed by the time the reading was taken. `LogReading` inserts wherever the timestamp falls, so packets that arrive out of order are still served in time order by `GET /api/sensors/{id}/timeline` and drawn that way by the dashboard's timeline graph. |
 | **HashSet** | `AnomalyEngine` keeps a `HashSet<string>` of disconnected nodes and another of open error states. `Add` returning `false` means the fault is already known, so the repeat alert is skipped: a node that stays silent raises one disconnect alert, not one per sweep. `GET /api/faults` shows both sets and the count of duplicates skipped. |
+| **Predictive actions** | `PredictionService` logs every search and command with the faults open at that moment, and counts "after event X, the operator did Y" pairs in a `Dictionary<string, Dictionary<string, int>>`. When X recurs, the follow-ups seen at least twice are pushed to the dashboard before the operator searches. A least-squares line over each device's recent readings flags the ones projected to cross their threshold within three minutes. |
 | **File upload** | `MultipartReader` streaming (never `IFormFile` buffering), magic-byte content sniffing, path-traversal stripping, a 25 MB ceiling enforced mid-flight, and AES-256-GCM at rest with per-chunk nonces and authenticated chunk indices. |
 | **Engagement** | The strategy chosen in Part 1 Task 1: anomaly-first visual encoding, severity-ranked rail, z-score spike detection against a rolling baseline, a *separate* silence timer for disconnects, and suppression-not-deletion of repeatedly dismissed alerts. |
 
@@ -464,6 +629,7 @@ Base path `/api`. Enums travel as names.
 | `GET` | `/sensors` | All sensor snapshots (value, baseline, sparkline, silence state) |
 | `GET` | `/sensors/{id}` | One snapshot. `{id}` is the id or the MAC in any spelling, here and on every other sensor route |
 | `GET` | `/registry` | Device registry: device count, lookups, misses, keys |
+| `GET` | `/search?q=` | Devices whose name, id, deployment path or category contains `q`. Every search is logged for the predictive engine |
 | `GET` | `/sensors/{id}/profile` | The stored registration |
 | `POST` | `/sensors` | Register a node - 400 with field-level errors on invalid input |
 | `DELETE` | `/sensors/{id}` | Deregister |
@@ -477,6 +643,12 @@ Base path `/api`. Enums travel as names.
 | `GET` | `/commands` | Override command history (newest first) and current overrides |
 | `POST` | `/commands` | Pin one actuator `{ sensorId, state }` or a whole kind `{ category, state }` |
 | `POST` | `/commands/undo` | Revert the most recent command - 409 when there is none |
+| `GET` | `/predictions/log` | Every search and command (newest first) with the faults it was counted against |
+| `GET` | `/predictions/pairs` | The dictionary of counters: every event seen, each with its follow-ups ranked |
+| `GET` | `/predictions/rank?context=&top=` | The top follow-ups to one event, e.g. `context=SoilMoisture%7CSilence` |
+| `GET` | `/predictions/suggestion` | The suggestion for the alert driving the operator now - 204 when there is none |
+| `GET` | `/predictions/trends` | Devices under their threshold but projected to cross it within three minutes, soonest first |
+| `POST` | `/sensors/{id}/drift?perSecond=` | Test trigger: the simulated node's reading climbs; omit the rate to reach the threshold in ~90 s, `perSecond=0` to stop |
 | `GET` | `/telemetry/aggregate?a=&b=` | Operator overloading over HTTP: sum, delta, comparison |
 | `GET` | `/alerts?includeSuppressed=` | Severity-ranked alert rail |
 | `POST` | `/alerts/{id}/dismiss` | Dismiss, and count toward suppression of that kind |
@@ -491,7 +663,7 @@ Base path `/api`. Enums travel as names.
 | `GET` | `/attachments/{attachmentId}` | Decrypt and download |
 
 Real-time channel: SignalR hub at `/hubs/telemetry`, pushing `tick`, `alertRaised`,
-`alertDismissed` and `sensorsChanged`.
+`alertDismissed`, `sensorsChanged` and `suggestionReady`.
 
 Quick check with the server running:
 
@@ -543,7 +715,9 @@ broker would plug in at that one call and nothing downstream changes.
 Gateway state is **in memory** and resets on restart: registered nodes, history and alerts
 are lost, and the 13 seeded nodes come back. Uploaded files stay on disk, encrypted, but
 their metadata is in memory too, so after a restart the API no longer lists or serves
-them. Persistence, the command stream and mesh routing arrive in Part 2 and the final PoE.
+them. What the predictive engine has learned is in memory as well, so its counters start
+empty after a restart and the moisture-then-pump pattern has to be taught again.
+Persistence, the command stream and mesh routing arrive in Part 2 and the final PoE.
 
 # References
 - [1] Microsoft. *Generics in C#*. Microsoft Learn. https://learn.microsoft.com/dotnet/csharp/fundamentals/types/generics
@@ -581,4 +755,7 @@ them. Persistence, the command stream and mesh routing arrive in Part 2 and the 
 - [33] Nielsen, J. (1994, updated 2024). *10 Usability Heuristics for User Interface Design — Visibility of system status*. Nielsen Norman Group. https://www.nngroup.com/articles/ten-usability-heuristics/
 - [34] Docker. *Multi-stage builds*. Docker Documentation. https://docs.docker.com/build/building/multi-stage/
 - [35] The Independent Institute of Education (2026). *PROG7312 Portfolio of Evidence Guide, Part 1*. The IIE.
+- [36] Microsoft. *Dictionary<TKey,TValue> Class*. Microsoft Learn. https://learn.microsoft.com/dotnet/api/system.collections.generic.dictionary-2
+- [37] Wikipedia. *Simple linear regression*. https://en.wikipedia.org/wiki/Simple_linear_regression
+- [38] Wikipedia. *Coefficient of determination*. https://en.wikipedia.org/wiki/Coefficient_of_determination
 
