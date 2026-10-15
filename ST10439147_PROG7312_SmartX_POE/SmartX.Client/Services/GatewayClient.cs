@@ -161,6 +161,53 @@ public sealed class GatewayClient(HttpClient http)
             : null;
     }
 
+    // ---- search ------------------------------------------------------------
+
+    /// <summary>Devices whose name, id, path or category contains the term. Empty if the gateway could not be reached.</summary>
+    public async Task<IReadOnlyList<SensorSnapshot>> SearchAsync(string term, CancellationToken ct = default)
+    {
+        try
+        {
+            return await http.GetFromJsonAsync<List<SensorSnapshot>>(
+                $"api/search?q={Uri.EscapeDataString(term)}", SmartXJson.Options, ct) ?? [];
+        }
+        catch (HttpRequestException)
+        {
+            return [];
+        }
+    }
+
+    // ---- predictive action engine ------------------------------------------
+
+    /// <summary>The suggestion for the alert driving the operator right now. Null when there is none or the gateway is down.</summary>
+    public async Task<Suggestion?> GetSuggestionAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var response = await http.GetAsync("api/predictions/suggestion", ct);
+            return response.StatusCode == System.Net.HttpStatusCode.OK
+                ? await response.Content.ReadFromJsonAsync<Suggestion>(SmartXJson.Options, ct)
+                : null;
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Devices climbing toward their threshold, soonest first. Empty if the gateway could not be reached.</summary>
+    public async Task<IReadOnlyList<TrendFlag>> GetTrendsAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            return await http.GetFromJsonAsync<List<TrendFlag>>("api/predictions/trends", SmartXJson.Options, ct) ?? [];
+        }
+        catch (HttpRequestException)
+        {
+            return [];
+        }
+    }
+
     // ---- timeline ----------------------------------------------------------
 
     /// <summary>One sensor's readings in timestamp order, oldest first. Null if the gateway could not be reached or the sensor is gone.</summary>

@@ -45,6 +45,85 @@
     </div>
 }
 
+@* ------------------------------------------------------------ operator search *@
+<section class="panel" style="margin-bottom:1rem">
+    <div class="panel-head">
+        <h2>Search</h2>
+        <span class="count">name, id, deployment path or category</span>
+    </div>
+
+    @* Pushed the moment a familiar alert comes round again, before anything is typed. *@
+    @if (LiveSuggestion is { } suggestion)
+    {
+        <div class="suggestion">
+            <p class="hint">
+                <span class="tag info">suggested next</span>
+                @Describe(suggestion.Context) on @suggestion.SensorName. After this alert you have usually:
+            </p>
+            <div class="actions">
+                @foreach (var followUp in suggestion.FollowUps)
+                {
+                    var (kind, target) = Split(followUp.FollowUp);
+                    if (kind == "Search")
+                    {
+                        <button @onclick="() => RunSuggestionAsync(target)">Search "@target" <span class="tag ok">&times;@followUp.Count</span></button>
+                    }
+                    else
+                    {
+                        <span class="tag" title="Issue it from Manual override">@target &times;@followUp.Count</span>
+                    }
+                }
+                <button class="ghost" @onclick="() => _suggestion = null">Dismiss</button>
+            </div>
+        </div>
+    }
+
+    @if (_trends.Count > 0)
+    {
+        <div class="suggestion">
+            <p class="hint"><span class="tag warn">trending</span> Still under threshold, but climbing toward it:</p>
+            <div class="actions">
+                @foreach (var trend in _trends)
+                {
+                    <button class="ghost" @onclick="() => OpenTrend(trend)">
+                        @trend.SensorName: @trend.Current.ToString("0.##") &rarr; @trend.Threshold.ToString("0.##")@trend.Unit
+                        in ~@Math.Ceiling(trend.SecondsToThreshold)s
+                    </button>
+                }
+            </div>
+        </div>
+    }
+
+    <form class="form-grid" @onsubmit="SearchAsync">
+        <div class="field">
+            <label for="search-term">Find a device</label>
+            <input id="search-term" type="search" @bind="_searchTerm" placeholder="pump" />
+        </div>
+    </form>
+
+    <div class="actions">
+        <button @onclick="SearchAsync" disabled="@string.IsNullOrWhiteSpace(_searchTerm)">Search</button>
+    </div>
+
+    @if (_searchResults is { Count: > 0 })
+    {
+        <div class="sensor-grid" style="margin-top:.8rem">
+            @foreach (var sensor in _searchResults)
+            {
+                <button class="tile @TileClass(sensor)" @onclick="() => SelectSensor(sensor)">
+                    <div class="name">@sensor.DisplayName</div>
+                    <div class="path">@sensor.DeploymentPath</div>
+                    <div class="reading">@Reading(sensor)<span class="unit">@sensor.Unit</span></div>
+                </button>
+            }
+        </div>
+    }
+    else if (_searchResults is not null)
+    {
+        <p class="hint" style="margin-top:.5rem">No device matches "@_searchedFor".</p>
+    }
+</section>
+
 <div class="dash">
 
     @* ------------------------------------------------------------ severity-ranked rail *@
@@ -679,6 +758,18 @@
     private CommandLog? _commands;
     private List<SensorSnapshot> _actuators = [];
 
+    private string _searchTerm = string.Empty;
+    private string _searchedFor = string.Empty;
+    private IReadOnlyList<SensorSnapshot>? _searchResults;   // null until the first search
+
+    private Suggestion? _suggestion;
+    private IReadOnlyList<TrendFlag> _trends = [];
+
+    // Same window the gateway uses for "this alert is why the operator is acting": past it,
+    // the suggestion is stale. The once-a-second tick re-renders, so it drops off on its own.
+    private Suggestion? LiveSuggestion
+        => _suggestion is { } s && DateTimeOffset.UtcNow - s.RaisedAt < TimeSpan.FromMinutes(2) ? s : null;
+
     private RegistryStatus? _registry;
     private string _registryKey = string.Empty;
     private SensorSnapshot? _registryHit;
@@ -707,6 +798,7 @@
         await RefreshRegistryAsync();
         await RefreshTimelineAsync();
         await RefreshFaultsAsync();
+        _suggestion = await Gateway.GetSuggestionAsync();
 
         _hub = new HubConnectionBuilder()
             .WithUrl(new Uri(Gateway.BaseAddress, "hubs/telemetry"))
@@ -730,6 +822,7 @@
             await RefreshRegistryAsync();
             await RefreshTimelineAsync();
             await RefreshFaultsAsync();
+            _trends = await Gateway.GetTrendsAsync();
 
             await InvokeAsync(StateHasChanged);
         });
@@ -744,6 +837,12 @@
             else _active.Insert(0, alert);
 
             Rank();
+            await InvokeAsync(StateHasChanged);
+        });
+
+        _hub.On<Suggestion>(HubEvents.SuggestionReady, async suggestion =>
+        {
+            _suggestion = suggestion;
             await InvokeAsync(StateHasChanged);
         });
 
@@ -847,6 +946,44 @@
 
     private async Task AggregateAsync()
         => _aggregate = await Gateway.AggregateAsync(_aggregateA, _aggregateB);
+
+    private async Task SearchAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_searchTerm)) return;
+
+        _searchedFor = _searchTerm.Trim();
+        _searchResults = await Gateway.SearchAsync(_searchedFor);
+
+        // One hit is the device the operator wanted, so open it straight away.
+        if (_searchResults.Count == 1) await SelectSensor(_searchResults[0]);
+    }
+
+    private async Task OpenTrend(TrendFlag trend)
+    {
+        if (_snapshots.FirstOrDefault(s => s.Id == trend.SensorId) is { } sensor) await SelectSensor(sensor);
+    }
+
+    // Goes through the normal search, so taking a suggestion is logged and reinforces it.
+    private async Task RunSuggestionAsync(string term)
+    {
+        _searchTerm = term;
+        await SearchAsync();
+    }
+
+    // "Search:pump" -> ("Search", "pump").
+    private static (string Kind, string Target) Split(string followUp)
+    {
+        var colon = followUp.IndexOf(':');
+        return (followUp[..colon], followUp[(colon + 1)..]);
+    }
+
+    // "SoilMoisture|Silence" -> "Soil moisture silence".
+    private static string Describe(string context)
+    {
+        var parts = context.Split('|');
+        var category = Enum.TryParse<SensorCategory>(parts[0], out var c) ? c.Spec().Label : parts[0];
+        return $"{category} {parts[1].ToLowerInvariant()}";
+    }
 
     private async Task RefreshRegistryAsync() => _registry = await Gateway.GetRegistryAsync() ?? _registry;
 

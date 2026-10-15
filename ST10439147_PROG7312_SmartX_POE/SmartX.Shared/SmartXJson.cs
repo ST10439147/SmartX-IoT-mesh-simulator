@@ -31,5 +31,6 @@ public static class HubEvents
     public const string AlertRaised = "alertRaised";
     public const string AlertDismissed = "alertDismissed";
     public const string SensorsChanged = "sensorsChanged";
+    public const string SuggestionReady = "suggestionReady";
 }
 //---------------------------DDDDDDDDDDDoooooooooooooo END OF FILE DDDDDDDDDDDoooooooooooooo---------------------------//

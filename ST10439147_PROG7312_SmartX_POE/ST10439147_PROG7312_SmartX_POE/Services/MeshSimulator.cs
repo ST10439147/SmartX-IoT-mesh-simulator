@@ -20,6 +20,7 @@ public sealed class MeshSimulator(
     TelemetryStore store,
     AnomalyEngine anomalies,
     CommandService commands,
+    PredictionService predictions,
     IHubContext<TelemetryHub> hub,
     IServer server,
     IHostApplicationLifetime lifetime,
@@ -48,6 +49,19 @@ public sealed class MeshSimulator(
     /// power had been pulled. A zero duration plugs it straight back in.
     /// </summary>
     public void Unplug(string sensorId, TimeSpan duration) => _unplugged[sensorId] = DateTimeOffset.UtcNow + duration;
+
+    // Nodes whose reading is climbing, and by how much a second. Same threading as _unplugged.
+    private readonly ConcurrentDictionary<string, double> _drifting = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Test trigger: the node's reading climbs by <paramref name="perSecond"/> units a second
+    /// on top of its normal signal. Zero stops the climb and puts it back where it started.
+    /// </summary>
+    public void Drift(string sensorId, double perSecond)
+    {
+        if (perSecond == 0) _drifting.TryRemove(sensorId, out _);
+        else _drifting[sensorId] = perSecond;
+    }
     //----------------------------------------------------------------------------------------------------------------------//
 
     // Reference [22]: Microsoft. Introduction to ASP.NET Core SignalR. Microsoft Learn.
@@ -100,7 +114,12 @@ public sealed class MeshSimulator(
                 if (elapsed % 5 == 0)
                 {
                     foreach (var alert in anomalies.SweepForSilence())
+                    {
                         await hub.Clients.All.SendAsync(HubEvents.AlertRaised, alert, stoppingToken);
+
+                        if (predictions.Suggest(alert) is { } suggestion)
+                            await hub.Clients.All.SendAsync(HubEvents.SuggestionReady, suggestion, stoppingToken);
+                    }
                 }
 
                 await hub.Clients.All.SendAsync(
@@ -166,6 +185,9 @@ public sealed class MeshSimulator(
 
             // --- spike injection
             var spiking = _random.NextDouble() < 0.012;
+
+            // --- drift: a node an operator set climbing gains its rate for every second since it last published.
+            node.Ramp = _drifting.TryGetValue(sensor.Id, out var perSecond) ? node.Ramp + perSecond * sensor.PublishIntervalSeconds : 0;
 
             switch (sensor.Payload)
             {
@@ -279,6 +301,7 @@ public sealed class MeshSimulator(
         public double Noise;
         public bool Flag;
         public int MutedUntil;
+        public double Ramp;   // offset built up by the drift trigger; zero when not drifting
         private double _drift;
         //----------------------------------------------------------------------------------------------------------------------//
         public float NextFloat(Random random, bool spiking)
@@ -287,7 +310,7 @@ public sealed class MeshSimulator(
             // than sitting pinned to a constant.
             _drift = Math.Clamp(_drift + (random.NextDouble() - 0.5) * Noise * 0.15, -Noise, Noise);
 
-            var value = Baseline + _drift + (random.NextDouble() - 0.5) * Noise;
+            var value = Baseline + Ramp + _drift + (random.NextDouble() - 0.5) * Noise;
             if (spiking) value += Noise * random.Next(5, 10) * (random.NextDouble() < 0.5 ? -1 : 1);
 
             return (float)value;

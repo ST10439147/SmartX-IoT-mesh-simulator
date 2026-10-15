@@ -43,6 +43,12 @@ internal static class SelfCheckRunner
 
             foreach (var line in RunDisconnectChecks())
                 Console.WriteLine($"  ok  {line}");
+
+            foreach (var line in RunPredictionLogChecks())
+                Console.WriteLine($"  ok  {line}");
+
+            foreach (var line in RunTrendChecks())
+                Console.WriteLine($"  ok  {line}");
         }
         catch (Exception ex)
         {
@@ -375,6 +381,113 @@ internal static class SelfCheckRunner
         Assert(Send(40f) is null && !engine.ActiveErrors.Contains(breachKey), "back under the threshold, the error state is cleared");
 
         log.Add("hash set: a silent node raises one disconnect alert, an open error state is not raised twice");
+        return log;
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    private static IEnumerable<string> RunPredictionLogChecks()
+    {
+        var log = new List<string>();
+        var store = new TelemetryStore();
+        var engine = new AnomalyEngine(store, new CommandService(), NullLogger<AnomalyEngine>.Instance);
+        var predictions = new PredictionService(store, engine);
+
+        var probe = store.Register(new SensorRegistration
+        {
+            MacAddress = "A4:CF:12:9B:04:7F",
+            DisplayName = "Soil Moisture South",
+            DeploymentPath = "Facility A/Zone 1/Sub-Zone B",
+            Category = SensorCategory.SoilMoisture,
+            PublishIntervalSeconds = 2
+        });
+
+        // Nothing wrong: the action is logged with no context.
+        Assert(predictions.Record(OperatorActionKind.Search, "valve").Contexts.Count == 0, "with no fault open an action has no context");
+
+        // The probe goes silent, then the operator searches. The search is tied to that open fault.
+        var lastHeard = DateTimeOffset.UtcNow;
+        store.Ingest(new TelemetryPacket<float>(probe.Id, 31f, probe.Category, lastHeard));
+        var outage = engine.SweepForSilence(lastHeard.AddSeconds(8))[0];
+
+        var search = predictions.Record(OperatorActionKind.Search, "  Pump ");
+        Assert(search.Contexts.SequenceEqual(["SoilMoisture|Silence"]),
+            $"a search during a moisture outage should carry that fault, got '{string.Join(", ", search.Contexts)}'");
+        Assert(search.FollowUp == "Search:pump", "search terms are normalised so 'Pump ' and 'pump' are one follow-up");
+        Assert(predictions.Suggest(outage) is null, "one search is not a habit yet, so nothing is suggested");
+
+        var command = predictions.Record(OperatorActionKind.Command, "Switch Borehole Pump on");
+        Assert(command.FollowUp == "Command:Switch Borehole Pump on", "command labels are kept as issued");
+        Assert(predictions.Log[0] == command && predictions.Log.Count == 3, "the log is newest first and holds every action");
+
+        // The pattern repeats: more pump searches under the same alert. Pump outranks the command.
+        predictions.Record(OperatorActionKind.Search, "pump");
+        predictions.Record(OperatorActionKind.Search, "PUMP");
+        var ranked = predictions.Rank("SoilMoisture|Silence");
+        Assert(ranked.Count == 2 && ranked[0] == new RankedFollowUp("Search:pump", 3) && ranked[1].Count == 1,
+            $"pump searched three times should rank first, got {string.Join(", ", ranked)}");
+        Assert(predictions.Rank("SoilMoisture|Silence", top: 1).Count == 1, "top limits the ranking");
+        Assert(predictions.Rank("TankLevel|Spike").Count == 0, "an event never seen has no follow-ups");
+        Assert(predictions.Pairs.Keys.SequenceEqual(["SoilMoisture|Silence"]), "an action with no alert open forms no pair");
+
+        // The moisture alert comes round again: the pump is suggested on its own. The command,
+        // done only once, is below MinOccurrences and is left out.
+        var suggestion = predictions.Suggest(outage);
+        Assert(suggestion is { FollowUps.Count: 1 } && suggestion.FollowUps[0].FollowUp == "Search:pump",
+            "a repeated moisture-then-pump pattern should suggest the pump when the alert recurs");
+        Assert(predictions.Current == suggestion, "the latest suggestion is kept for a dashboard that opens mid-alert");
+        Assert(predictions.Suggest(outage with { Kind = AlertKind.Spike }) is null, "a different event has nothing learned to suggest");
+        Assert(predictions.Suggest(outage with { Suppressed = true }) is null, "a suppressed alert gets no suggestion");
+
+        // The node reports again, so the fault is closed: what the operator does now is not a reaction to it.
+        var back = DateTimeOffset.UtcNow;
+        store.Ingest(new TelemetryPacket<float>(probe.Id, 31f, probe.Category, back));
+        engine.SweepForSilence(back.AddSeconds(1));
+        Assert(predictions.Record(OperatorActionKind.Search, "pump").Contexts.Count == 0, "once the fault closes, actions are no longer tied to it");
+
+        for (var i = 0; i < PredictionService.MaxLog; i++) predictions.Record(OperatorActionKind.Search, $"s{i}");
+        Assert(predictions.Log.Count == PredictionService.MaxLog, "the log drops its oldest entries past the cap");
+
+        log.Add("prediction log: every search and command is logged with the alert that was open at the time");
+        log.Add("dictionary of counters: after-X-did-Y pairs are counted and the most frequent follow-up ranks first");
+        log.Add("suggestion: when a moisture alert recurs, the pump the operator keeps searching for is suggested");
+        return log;
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    private static IEnumerable<string> RunTrendChecks()
+    {
+        var log = new List<string>();
+        var store = new TelemetryStore();
+        var predictions = new PredictionService(store, new AnomalyEngine(store, new CommandService(), NullLogger<AnomalyEngine>.Instance));
+
+        // Four moisture probes (threshold 45 %VWC, a packet every 2s), each fed 30 readings.
+        var start = DateTimeOffset.UtcNow.AddMinutes(-2);
+        string Probe(int n, Func<int, float> reading)
+        {
+            var probe = store.Register(new SensorRegistration
+            {
+                MacAddress = $"A4:CF:12:9B:07:{n:X2}",
+                DisplayName = $"Trend probe {n}",
+                DeploymentPath = "Facility A/Zone 1/Sub-Zone A",
+                Category = SensorCategory.SoilMoisture,
+                PublishIntervalSeconds = 2
+            });
+
+            for (var i = 0; i < PredictionService.TrendSamples; i++)
+                store.Ingest(new TelemetryPacket<float>(probe.Id, reading(i), probe.Category, start.AddSeconds(i * 2)));
+            return probe.Id;
+        }
+
+        Probe(1, i => i % 2 == 0 ? 29f : 31f);          // noise about a flat line
+        var climbing = Probe(2, i => 30f + 0.3f * i);   // ends at 38.7, +0.15/s: crosses 45 in 42s
+        Probe(3, i => 30f + 0.01f * i);                 // climbing, but would take half an hour
+        Probe(4, i => 40f + 0.3f * i);                  // already over 45: a breach, not a trend
+
+        var flags = predictions.TrendFlags();
+        Assert(flags.Count == 1 && flags[0].SensorId == climbing,
+            $"only the steady climb close to its threshold should be flagged, got {string.Join(", ", flags.Select(f => f.SensorName))}");
+        Assert(Math.Abs(flags[0].SecondsToThreshold - 42) < 1 && Math.Abs(flags[0].SlopePerSecond - 0.15) < 1e-3,
+            $"the climb should be projected to cross in about 42s, got {flags[0].SecondsToThreshold:0.#}s");
+
+        log.Add("trend: a least-squares line flags a device climbing toward its threshold and when it will cross");
         return log;
     }
     //----------------------------------------------------------------------------------------------------------------------//

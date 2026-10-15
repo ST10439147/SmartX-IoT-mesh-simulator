@@ -35,6 +35,7 @@ builder.Services.AddSingleton<AnomalyEngine>();
 builder.Services.AddSingleton<AttachmentService>();
 builder.Services.AddSingleton<IngestQueue>();
 builder.Services.AddSingleton<CommandService>();
+builder.Services.AddSingleton<PredictionService>();
 // Reference [23]: Microsoft. Background tasks with hosted services in ASP.NET Core. Microsoft Learn.
 //   https://learn.microsoft.com/aspnet/core/fundamentals/host/hosted-services
 builder.Services.AddHostedService<IngestWorker>();
@@ -80,7 +81,24 @@ api.MapGet("/sensors/{id}", (string id, TelemetryStore store) =>
         ? Results.Ok(store.Snapshot(sensor))
         : Results.NotFound(new { message = $"No sensor registered with id '{id}'." }));
 
-api.MapGet("/sensors/{id}/profile", (string id, TelemetryStore store) =>
+// Operator search: case-insensitive substring over name, id, deployment path and category.
+// It runs on the gateway rather than filtering in the browser so every search is an event
+// the gateway sees - the predictive engine learns from them.
+api.MapGet("/search", ([FromQuery] string? q, TelemetryStore store, PredictionService predictions) =>
+{
+    if (string.IsNullOrWhiteSpace(q)) return Results.BadRequest(new { message = "Give a search term (q)." });
+
+    var term = q.Trim();
+    predictions.Record(OperatorActionKind.Search, term);
+
+    return Results.Ok(store.Snapshots().Where(s =>
+        s.DisplayName.Contains(term, StringComparison.OrdinalIgnoreCase)
+        || s.Id.Contains(term, StringComparison.OrdinalIgnoreCase)
+        || s.DeploymentPath.Contains(term, StringComparison.OrdinalIgnoreCase)
+        || s.Category.Spec().Label.Contains(term, StringComparison.OrdinalIgnoreCase)).ToList());
+});
+
+api.MapGet("/sensors/{id}/profile",(string id, TelemetryStore store) =>
     store.TryGet(id, out var sensor) ? Results.Ok(sensor) : Results.NotFound());
 
 // Reference [17]: Microsoft. Handle errors in ASP.NET Core - problem details / ValidationProblem. Microsoft Learn.
@@ -233,7 +251,7 @@ api.MapGet("/commands/history", (CommandService commands) => Results.Ok(commands
 
 // Pins one actuator (sensorId) or every actuator of a kind (category) on or off.
 // "Shut all valves" is { "category": "IrrigationValve", "state": false }.
-api.MapPost("/commands", (CommandRequest request, TelemetryStore store, CommandService commands) =>
+api.MapPost("/commands", (CommandRequest request, TelemetryStore store, CommandService commands, PredictionService predictions) =>
 {
     List<SensorRegistration> targets;
 
@@ -263,13 +281,40 @@ api.MapPost("/commands", (CommandRequest request, TelemetryStore store, CommandS
         ? $"Switch {targets[0].DisplayName} {action}"
         : $"Switch all {targets[0].Category.Spec().Label} devices {action}";
 
-    return Results.Ok(commands.Issue(label, targets.Select(s => s.Id), request.State));
+    var command = commands.Issue(label, targets.Select(s => s.Id), request.State);
+    predictions.Record(OperatorActionKind.Command, label);
+    return Results.Ok(command);
 });
 
-api.MapPost("/commands/undo", (CommandService commands) =>
-    commands.TryUndo(out var undone)
-        ? Results.Ok(undone)
-        : Results.Conflict(new { message = "Nothing to undo." }));
+api.MapPost("/commands/undo", (CommandService commands, PredictionService predictions) =>
+{
+    if (!commands.TryUndo(out var undone)) return Results.Conflict(new { message = "Nothing to undo." });
+
+    predictions.Record(OperatorActionKind.Command, $"Undo {undone!.Label}");
+    return Results.Ok(undone);
+});
+
+// ---------------------------------------------------------------- predictive action engine
+
+// Every search and command, newest first, with the alert (Category|AlertKind) that was
+// on the rail when it was made. A null context means nothing was alerting.
+api.MapGet("/predictions/log", (PredictionService predictions) => predictions.Log);
+
+// The dictionary of counters: every event seen, each with its follow-ups ranked.
+api.MapGet("/predictions/pairs", (PredictionService predictions) => predictions.Pairs);
+
+// The suggestion for the alert that is driving the operator right now, so a dashboard
+// opened mid-alert still shows it. 204 when there is none. New ones are pushed as
+// HubEvents.SuggestionReady the moment their alert is raised.
+api.MapGet("/predictions/suggestion", (PredictionService predictions) =>
+    predictions.Current is { } suggestion ? Results.Ok(suggestion) : Results.NoContent());
+
+// Devices under their threshold but projected to cross it within the trend horizon, soonest first.
+api.MapGet("/predictions/trends", (PredictionService predictions) => predictions.TrendFlags());
+
+// The top follow-ups to one event, e.g. ?context=SoilMoisture|ThresholdBreach&top=3.
+api.MapGet("/predictions/rank", ([FromQuery] string context, PredictionService predictions, [FromQuery] int top = 3) =>
+    predictions.Rank(context, Math.Clamp(top, 1, 20)));
 
 // Returns the typed packets themselves, so TelemetryPacket<T> is what crosses the wire
 // rather than a flattened DTO. The client deserialises straight back into the same type.
@@ -410,6 +455,20 @@ api.MapPost("/sensors/{id}/unplug", (string id, TelemetryStore store, MeshSimula
     mesh.Unplug(sensor.Id, TimeSpan.FromSeconds(seconds));
 
     return Results.Accepted("/api/faults", new { sensor.Id, silentForSeconds = seconds });
+});
+
+// Test trigger: the simulated node's reading starts climbing by perSecond units a second,
+// for the trend flags in GET /api/predictions/trends to catch. Left out, the rate is set so
+// the node reaches its threshold in about 90 seconds. perSecond=0 stops it and drops back.
+api.MapPost("/sensors/{id}/drift", (string id, TelemetryStore store, MeshSimulator mesh, [FromQuery] double? perSecond) =>
+{
+    if (!store.TryGet(id, out var sensor)) return Results.NotFound();
+    if (sensor.Payload == PayloadKind.Boolean) return Results.BadRequest(new { message = "Valves and vents report a state; there is nothing to drift." });
+
+    var rate = perSecond ?? Math.Max(0, sensor.WarningThreshold - store.LatestNumeric(sensor.Id)) / 90;
+    mesh.Drift(sensor.Id, rate);
+
+    return Results.Accepted("/api/predictions/trends", new { sensor.Id, perSecond = rate });
 });
 
 // ---------------------------------------------------------------- topology (recursion)
