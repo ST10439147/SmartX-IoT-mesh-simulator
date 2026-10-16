@@ -163,6 +163,7 @@ footer.foot {
     border: 1px solid transparent;
     transition: background .15s, color .15s, border-color .15s;
 }
+.nav-locked { padding: .4rem .8rem; color: var(--dim); font-size: .9rem; opacity: .5; cursor: not-allowed; }
 .nav a:hover { color: var(--text); background: var(--panel-2); }
 .nav a.active { color: var(--text); background: var(--panel-2); border-color: var(--line); }
 

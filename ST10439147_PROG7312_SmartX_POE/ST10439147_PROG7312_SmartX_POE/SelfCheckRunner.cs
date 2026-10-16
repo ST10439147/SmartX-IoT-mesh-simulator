@@ -180,7 +180,8 @@ internal static class SelfCheckRunner
         Assert(!queue.TryEnqueue("meter-1", 0), "a full queue must refuse the packet, not grow without bound");
         Assert(queue.TryEnqueue("meter-1", 0, AlertKind.Spike), "a full normal lane must not turn a critical packet away");
 
-        log.Add("queue: FIFO for normal packets, criticals jump the line, a full lane sheds load");
+        log.Add("queue: normal packets leave in strict FIFO order");
+        log.Add("priority queue: criticals jump a backed-up lane, spikes first, ties in arrival order, a full lane sheds load");
         return log;
     }
     //----------------------------------------------------------------------------------------------------------------------//
