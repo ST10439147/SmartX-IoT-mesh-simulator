@@ -104,7 +104,8 @@ SmartX self-check
   ok  crypto: AES-256-GCM round-trips at 0, 1, 1 KB, 64 KB and multi-chunk sizes
   ok  crypto: bit-flips, truncation and wrong keys are all rejected
   ok  uploads: magic-byte sniffing, text validation and path-traversal stripping
-  ok  queue: FIFO for normal packets, criticals jump the line, a full lane sheds load
+  ok  queue: normal packets leave in strict FIFO order
+  ok  priority queue: criticals jump a backed-up lane, spikes first, ties in arrival order, a full lane sheds load
   ok  stack: commands undo last-in-first-out, a batch reverts as one, empty undo is safe
   ok  pump override: a commanded stop and restart raise nothing, an unexpected stop still alerts
   ok  dictionary: a device is found by id or by MAC in any spelling, misses are counted
@@ -121,6 +122,55 @@ all checks passed
 That `0 bytes allocated over 50 000 ingests` line is measured with
 `GC.GetAllocatedBytesForCurrentThread()`, not asserted in a comment - if anything on the
 ingest path started boxing, this check fails.
+
+---
+
+## Testing Part 2
+
+Everything below takes a few minutes. Each structure has one self-check line and one
+manual step; the full walkthroughs are in the sections that follow.
+
+**1. Self-check (about 30 seconds, no running app needed).** Run the command in
+*Verifying the build*. It must end with `all checks passed` and exit code 0. These lines
+are the Part 2 checks:
+
+| Structure | Self-check line starts with | What it proves |
+|---|---|---|
+| `Queue<T>` | `queue:` | normal packets leave in arrival order (1,2,3,4,5) |
+| `PriorityQueue<T,P>` | `priority queue:` | criticals leave first: 5,4,6,1,2,3,7 |
+| `Stack<T>` | `stack:` | Undo reverts commands last-in-first-out |
+| `SortedDictionary` | `sorted dictionary:` | packets sent 3,1,4,2 read back 1,2,3,4 |
+| `HashSet<T>` | `hash set:` | one outage raises one alert, repeat sweeps are skipped |
+| Suggestion ranking | `dictionary of counters:` and `suggestion:` | the most-repeated follow-up ranks first and is suggested |
+
+**2. Simulate a high-priority alert (about 2 minutes).**
+
+1. Start the app (see Quick start) and open <http://localhost:5036/dashboard>.
+2. In the *Ingest queue* panel click **Flood the queue**. *Waiting (normal)* jumps to about 200.
+3. While it counts down, click **Send critical packet**. The line under the counters shows
+   how many older normal packets it overtook, and its row in *Processing order* is red.
+
+Or, from a shell (Git Bash, macOS/Linux, Windows `cmd`; PowerShell users use the buttons):
+
+```bash
+curl -X POST "http://localhost:5036/api/queue/flood?count=200&delayMs=20"
+```
+
+```bash
+curl -X POST http://localhost:5036/api/telemetry -H "Content-Type: application/json" -d "{\"sensorId\":\"A4:CF:12:9B:04:7E\",\"value\":95}"
+```
+
+```bash
+curl http://localhost:5036/api/queue
+```
+
+In `recent`, the entry with `"lane": "critical"` has a `position` lower than the normal
+packets that arrived before it.
+
+**3. The other structures.** Follow the matching section: Undo in *Stack: manual override
+commands and Undo*, sorted order in *SortedDictionary: the sensor timeline*, set
+deduplication in *HashSet: disconnected nodes and open error states*, and suggestion
+ranking in *Suggest the pump after a moisture alert*.
 
 ---
 
@@ -270,8 +320,8 @@ reverted; once the stack is empty it answers `409` with `"Nothing to undo."` rat
 failing. Commanding a sensor that is not an actuator returns `400`.
 
 Both structures are also covered by the self-check (see Verifying the build): the `queue:`
-line proves FIFO order and that criticals jump the line, and the `stack:` line proves
-last-in-first-out undo.
+line proves FIFO order, the `priority queue:` line proves that criticals jump the line,
+and the `stack:` line proves last-in-first-out undo.
 
 ---
 
