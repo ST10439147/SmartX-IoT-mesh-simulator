@@ -1,4 +1,4 @@
-# Smart-X IoT Mesh Gateway - Part 1, Task 2
+# Smart-X IoT Mesh Gateway - Part 2
 
 Ingestion API and configuration dashboard for the Smart-X hybrid IoT ecosystem: an
 ASP.NET Core Minimal API on **.NET 10** receiving multi-typed telemetry from a simulated
@@ -176,8 +176,9 @@ ranking in *Suggest the pump after a moisture alert*.
 
 ## Using the console
 
-1. **Gateway** (`/`) - landing page with the three architectural pillars. Pillar 1 is
-   live; pillars 2 and 3 are visibly disabled and labelled with the Part they arrive in.
+1. **Gateway** (`/`) - landing page with the three architectural pillars. Pillars 1
+   (ingestion) and 2 (command stream) are live; pillar 3 (mesh routing) is visibly locked
+   until the final Portfolio of Evidence.
    The header shows a real measured round-trip to the API, refreshed every 10 seconds.
 2. **Ingestion** (`/ingestion`) - register a node (MAC, display name, deployment path,
    sensor category, publish interval, threshold), attach a config file, hardware log or
@@ -186,6 +187,9 @@ ranking in *Suggest the pump after a moisture alert*.
 3. **Live dashboard** (`/dashboard`) - the severity-ranked alert rail, the small-multiple
    sensor grid, the drill-down inspector, and a panel that aggregates two pump meters
    through the overloaded `+`.
+4. **Command stream** (`/commands`) - the live feed, category and alert-state filters,
+   manual override commands with Undo, ingest queue depth, the sensor timeline and the
+   suggested actions. Feed and filters survive navigation to the other pages.
 
 ### Sensor categories
 
@@ -643,7 +647,10 @@ ST10439147_PROG7312_SmartX_POE/
 │   ├── Topology/TopologyValidator.cs     recursive validation
 │   └── Diagnostics/SelfCheck.cs          the runnable check
 ├── ST10439147_PROG7312_SmartX_POE     ← Minimal API (assembly SmartX.Api): SignalR hub,
-│                                        mesh simulator, attachments
+│   │                                    mesh simulator, attachments
+│   └── Services/IngestQueue.cs, IngestWorker.cs   Queue<T> + PriorityQueue lanes, worker
+│       Services/CommandService.cs                 Stack<T> override history, Undo
+│       Services/PredictionService.cs              pair counts, trend flags, suggestions
 └── SmartX.Client                      ← Blazor WebAssembly console
 ```
 
@@ -757,17 +764,19 @@ On Linux or macOS, `openssl rand -base64 32` does the same job.
 
 ## Known scope
 
-Telemetry is **simulated** - `MeshSimulator` stands in for the MQTT feed, injecting value
-spikes and node disconnects so the alerting path has something real to catch. There is no
-HTTP telemetry endpoint; the simulator calls `TelemetryStore.Ingest` directly, so a real
-broker would plug in at that one call and nothing downstream changes.
+Telemetry is **simulated** - `MeshSimulator` stands in for the physical devices, injecting
+value spikes and node disconnects so the alerting path has something real to catch. It
+reaches the gateway the way a device would: every reading is an HTTP `POST /api/telemetry`,
+which enters the ingest queue and is processed by the background worker. A real ESP32 would
+post to the same endpoint and nothing downstream changes.
 
 Gateway state is **in memory** and resets on restart: registered nodes, history and alerts
 are lost, and the 13 seeded nodes come back. Uploaded files stay on disk, encrypted, but
 their metadata is in memory too, so after a restart the API no longer lists or serves
 them. What the predictive engine has learned is in memory as well, so its counters start
 empty after a restart and the moisture-then-pump pattern has to be taught again.
-Persistence, the command stream and mesh routing arrive in Part 2 and the final PoE.
+Pillar 3 (Network Topology and Mesh Routing) and persistence are out of scope for this
+part and arrive in the final PoE.
 
 # References
 - [1] Microsoft. *Generics in C#*. Microsoft Learn. https://learn.microsoft.com/dotnet/csharp/fundamentals/types/generics
