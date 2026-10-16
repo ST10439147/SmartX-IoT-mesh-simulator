@@ -167,7 +167,14 @@ curl http://localhost:5036/api/queue
 In `recent`, the entry with `"lane": "critical"` has a `position` lower than the normal
 packets that arrived before it.
 
-**3. The other structures.** Follow the matching section: Undo in *Stack: manual override
+**3. Filter the command stream (about 1 minute).** Open <http://localhost:5036/commands>.
+In *Live feed*, pick a **Category** (for example Soil Moisture) and an **Alert state**
+(Alerting, Silent or Normal), or type in **Search** (name, id or deployment path). The
+filters combine, and the counter above the grid shows *n of N nodes*. Click **Unplug** on
+the dashboard, then filter to *Silent* to find the disconnected node. Your filters stay
+set when you leave the page and come back.
+
+**4. The other structures.** Follow the matching section: Undo in *Stack: manual override
 commands and Undo*, sorted order in *SortedDictionary: the sensor timeline*, set
 deduplication in *HashSet: disconnected nodes and open error states*, and suggestion
 ranking in *Suggest the pump after a moisture alert*.
