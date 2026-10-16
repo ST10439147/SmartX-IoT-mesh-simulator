@@ -30,6 +30,8 @@ public sealed class CommandService
 {
     private readonly Stack<OverrideCommand> _history = new();
     private readonly Dictionary<string, bool> _overrides = new(StringComparer.OrdinalIgnoreCase);
+    // Reference [39]: Microsoft. Lock Class (System.Threading). Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/api/system.threading.lock
     private readonly Lock _gate = new();
 
     private long _nextId;

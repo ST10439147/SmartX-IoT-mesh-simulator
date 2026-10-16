@@ -60,6 +60,10 @@ public sealed class IngestQueue
     // that two equal-priority packets come out in the order they went in.
     private readonly PriorityQueue<QueuedPacket, (int Rank, long Sequence)> _critical = new();
 
+    // Reference [40]: Microsoft. SemaphoreSlim Class. Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/api/system.threading.semaphoreslim
+    // Reference [39]: Microsoft. Lock Class (System.Threading). Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/api/system.threading.lock
     private readonly SemaphoreSlim _available = new(0);
     private readonly Lock _gate = new();
 

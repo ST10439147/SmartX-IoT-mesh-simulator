@@ -55,6 +55,8 @@ public sealed class PredictionService(TelemetryStore store, AnomalyEngine anomal
     private readonly Queue<OperatorAction> _log = new();
     private Suggestion? _latest;
     private readonly Dictionary<string, Dictionary<string, int>> _pairs = new(StringComparer.OrdinalIgnoreCase);
+    // Reference [39]: Microsoft. Lock Class (System.Threading). Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/api/system.threading.lock
     private readonly Lock _gate = new();
 
     /// <summary>Logged actions, newest first.</summary>

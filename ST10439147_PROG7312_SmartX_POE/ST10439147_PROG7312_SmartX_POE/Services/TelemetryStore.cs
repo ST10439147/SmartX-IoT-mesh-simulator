@@ -80,6 +80,8 @@ public sealed class TelemetryStore
     //   https://learn.microsoft.com/dotnet/api/system.collections.generic.dictionary-2
     public bool TryGet(string macOrId, out SensorRegistration sensor)
     {
+        // Reference [44]: Microsoft. Interlocked Class. Microsoft Learn.
+        //   https://learn.microsoft.com/dotnet/api/system.threading.interlocked
         Interlocked.Increment(ref _lookups);
         if (_sensors.TryGetValue(KeyFor(macOrId), out sensor!)) return true;
 

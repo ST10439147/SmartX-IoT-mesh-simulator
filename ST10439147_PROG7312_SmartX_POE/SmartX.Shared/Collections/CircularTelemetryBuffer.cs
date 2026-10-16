@@ -23,6 +23,8 @@ namespace SmartX.Shared.Telemetry;
 public sealed class CircularTelemetryBuffer<T> : IEnumerable<TelemetryPacket<T>> where T : struct
 {
     private readonly TelemetryPacket<T>[] _items;
+    // Reference [39]: Microsoft. Lock Class (System.Threading). Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/api/system.threading.lock
     private readonly Lock _gate = new();
     private int _head;   // next slot to write
     private int _count;

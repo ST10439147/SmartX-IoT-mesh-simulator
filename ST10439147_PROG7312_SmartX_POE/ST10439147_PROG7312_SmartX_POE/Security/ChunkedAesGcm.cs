@@ -76,6 +76,8 @@ public static class ChunkedAesGcm
             var isFinal = read < ChunkSize;
             total += read;
 
+            // Reference [43]: Microsoft. BinaryPrimitives Class. Microsoft Learn.
+            //   https://learn.microsoft.com/dotnet/api/system.buffers.binary.binaryprimitives
             BinaryPrimitives.WriteUInt32BigEndian(nonce.AsSpan(PrefixSize), counter);
             BinaryPrimitives.WriteUInt32BigEndian(aad.AsSpan(0), counter);
             aad[4] = isFinal ? (byte)1 : (byte)0;

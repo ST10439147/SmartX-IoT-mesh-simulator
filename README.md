@@ -824,4 +824,15 @@ part and arrive in the final PoE.
 - [36] Microsoft. *Dictionary<TKey,TValue> Class*. Microsoft Learn. https://learn.microsoft.com/dotnet/api/system.collections.generic.dictionary-2
 - [37] Wikipedia. *Simple linear regression*. https://en.wikipedia.org/wiki/Simple_linear_regression
 - [38] Wikipedia. *Coefficient of determination*. https://en.wikipedia.org/wiki/Coefficient_of_determination
+- [39] Microsoft. *Lock Class (System.Threading)*. Microsoft Learn. https://learn.microsoft.com/dotnet/api/system.threading.lock
+- [40] Microsoft. *SemaphoreSlim Class*. Microsoft Learn. https://learn.microsoft.com/dotnet/api/system.threading.semaphoreslim
+- [41] Microsoft. *PeriodicTimer Class*. Microsoft Learn. https://learn.microsoft.com/dotnet/api/system.threading.periodictimer
+- [42] Microsoft. *IncrementalHash Class*. Microsoft Learn. https://learn.microsoft.com/dotnet/api/system.security.cryptography.incrementalhash
+- [43] Microsoft. *BinaryPrimitives Class*. Microsoft Learn. https://learn.microsoft.com/dotnet/api/system.buffers.binary.binaryprimitives
+- [44] Microsoft. *Interlocked Class*. Microsoft Learn. https://learn.microsoft.com/dotnet/api/system.threading.interlocked
+- [45] Microsoft. *ASP.NET Core Blazor file uploads (InputFile)*. Microsoft Learn. https://learn.microsoft.com/aspnet/core/blazor/file-uploads
+- [46] Microsoft. *UTF8Encoding Constructor (throwOnInvalidBytes)*. Microsoft Learn. https://learn.microsoft.com/dotnet/api/system.text.utf8encoding.-ctor
+- [47] Microsoft. *ASP.NET Core SignalR .NET client - automatically reconnect*. Microsoft Learn. https://learn.microsoft.com/aspnet/core/signalr/dotnet-client#automatically-reconnect
+- [48] Microsoft. *Random.Shuffle Method*. Microsoft Learn. https://learn.microsoft.com/dotnet/api/system.random.shuffle
+- [49] Microsoft. *Validator.TryValidateObject Method*. Microsoft Learn. https://learn.microsoft.com/dotnet/api/system.componentmodel.dataannotations.validator.tryvalidateobject
 

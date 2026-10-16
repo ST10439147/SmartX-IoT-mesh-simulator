@@ -358,6 +358,8 @@ api.MapPost("/sensors/{id}/timeline/scramble", (string id, TelemetryStore store,
         .ToArray();
 
     // Oldest-first would be in order. A shuffle can land on that, so turn it round if it does.
+    // Reference [48]: Microsoft. Random.Shuffle Method. Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/api/system.random.shuffle
     Random.Shared.Shuffle(sent);
     if (sent.SequenceEqual(sent.Order())) Array.Reverse(sent);
 
@@ -566,6 +568,8 @@ return 0;
 static Dictionary<string, string[]> Validate(object model)
 {
     var results = new List<ValidationResult>();
+    // Reference [49]: Microsoft. Validator.TryValidateObject Method. Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/api/system.componentmodel.dataannotations.validator.tryvalidateobject
     Validator.TryValidateObject(model, new ValidationContext(model), results, validateAllProperties: true);
 
     return results

@@ -47,6 +47,8 @@ public sealed class CommandStreamState(GatewayClient gateway) : IAsyncDisposable
         _hub = new HubConnectionBuilder()
             .WithUrl(new Uri(gateway.BaseAddress, "hubs/telemetry"))
             .AddJsonProtocol(options => SmartXJson.Configure(options.PayloadSerializerOptions))
+            // Reference [47]: Microsoft. ASP.NET Core SignalR .NET client - automatically reconnect. Microsoft Learn.
+            //   https://learn.microsoft.com/aspnet/core/signalr/dotnet-client#automatically-reconnect
             .WithAutomaticReconnect()
             .Build();
 
