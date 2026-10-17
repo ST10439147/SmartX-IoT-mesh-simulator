@@ -147,6 +147,7 @@
     <section class="panel">
         <div class="panel-head">
             <h2>Suggested actions</h2>
+            <button class="tiny" title="Forget everything learned so the engine starts from scratch" @onclick="Stream.ResetLearningAsync">Reset learning</button>
         </div>
 
         @if (LiveSuggestion is { } suggestion)
@@ -167,6 +168,31 @@
             </ul>
         }
 
+        @if (Stream.Insights.Count > 0)
+        {
+            <p class="hint"><span class="tag info">automated insights</span> Learned from your searches and commands, open faults first:</p>
+            @foreach (var insight in Stream.Insights)
+            {
+                <p class="hint">
+                    <span class="tag @(insight.Open ? "warn" : "ok")">@(insight.Open ? "open now" : "learned")</span>
+                    @insight.Label@(insight.Open ? ": " + string.Join(", ", insight.Devices) : "")
+                </p>
+                <ul class="list">
+                    @foreach (var followUp in insight.FollowUps)
+                    {
+                        <li>
+                            <span class="grow">@followUp.FollowUp.Replace(":", " ")</span>
+                            <span class="tag ok">&times;@followUp.Count</span>
+                            @if (followUp.FollowUp.StartsWith("Search:"))
+                            {
+                                <button class="tiny" @onclick="() => Stream.SearchText = followUp.FollowUp[7..]">Filter feed</button>
+                            }
+                        </li>
+                    }
+                </ul>
+            }
+        }
+
         @if (Stream.Trends.Count > 0)
         {
             <p class="hint"><span class="tag warn">trending</span> Under threshold, but climbing toward it:</p>
@@ -182,7 +208,7 @@
             </ul>
         }
 
-        @if (LiveSuggestion is null && Stream.Trends.Count == 0)
+        @if (LiveSuggestion is null && Stream.Trends.Count == 0 && Stream.Insights.Count == 0)
         {
             <p class="hint">Nothing to suggest. Suggestions appear when a familiar alert returns or a reading climbs toward its threshold.</p>
         }

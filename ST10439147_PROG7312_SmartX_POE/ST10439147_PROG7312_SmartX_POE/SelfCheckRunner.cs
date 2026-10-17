@@ -47,6 +47,9 @@ internal static class SelfCheckRunner
             foreach (var line in RunPredictionLogChecks())
                 Console.WriteLine($"  ok  {line}");
 
+            foreach (var line in RunPersistenceChecks())
+                Console.WriteLine($"  ok  {line}");
+
             foreach (var line in RunTrendChecks())
                 Console.WriteLine($"  ok  {line}");
         }
@@ -299,6 +302,12 @@ internal static class SelfCheckRunner
         Assert(timeline.Select(p => p.Sequence).SequenceEqual([2, 4, 1, 3]), "each point should still say when it arrived");
         Assert(store.Timeline(probe.Id, 2).Select(p => p.Value).SequenceEqual([3, 4]), "asking for 2 samples should return the newest 2");
 
+        // Two readings with the same timestamp are both kept, in arrival order.
+        var tie = start.AddSeconds(50);
+        store.LogReading(probe.Id, tie, 50, sequence: 10);
+        store.LogReading(probe.Id, tie, 51, sequence: 11);
+        Assert(store.Timeline(probe.Id, 2).Select(p => p.Value).SequenceEqual([50, 51]), "same-timestamp readings should both be kept");
+
         // Bounded: flood it past capacity and only the newest readings are left.
         for (var i = 0; i < TelemetryStore.TimelineCapacity + 10; i++)
             store.LogReading(probe.Id, start.AddSeconds(100 + i), i, sequence: 100 + i);
@@ -413,18 +422,29 @@ internal static class SelfCheckRunner
         Assert(search.Contexts.SequenceEqual(["SoilMoisture|Silence"]),
             $"a search during a moisture outage should carry that fault, got '{string.Join(", ", search.Contexts)}'");
         Assert(search.FollowUp == "Search:pump", "search terms are normalised so 'Pump ' and 'pump' are one follow-up");
+
+        // Repeating an action during the same fault is one habit, not several.
+        predictions.Record(OperatorActionKind.Search, "pump");
+        predictions.Record(OperatorActionKind.Search, "PUMP");
+        Assert(predictions.Rank("SoilMoisture|Silence").Single().Count == 1, "repeats during one fault should count once");
         Assert(predictions.Suggest(outage) is null, "one search is not a habit yet, so nothing is suggested");
 
         var command = predictions.Record(OperatorActionKind.Command, "Switch Borehole Pump on");
         Assert(command.FollowUp == "Command:Switch Borehole Pump on", "command labels are kept as issued");
-        Assert(predictions.Log[0] == command && predictions.Log.Count == 3, "the log is newest first and holds every action");
+        Assert(predictions.Log[0] == command && predictions.Log.Count == 5, "the log is newest first and holds every action");
 
-        // The pattern repeats: more pump searches under the same alert. Pump outranks the command.
+        // The fault closes and a new one opens: the same search now counts again. Pump outranks the command.
+        var back = DateTimeOffset.UtcNow;
+        store.Ingest(new TelemetryPacket<float>(probe.Id, 31f, probe.Category, back));
+        engine.SweepForSilence(back.AddSeconds(1));
+        store.Ingest(new TelemetryPacket<float>(probe.Id, 31f, probe.Category, back.AddSeconds(30)));
+        var secondOutage = engine.SweepForSilence(back.AddSeconds(38))[0];
+        predictions.Suggest(secondOutage);   // raising the alert is what starts a new count
         predictions.Record(OperatorActionKind.Search, "pump");
         predictions.Record(OperatorActionKind.Search, "PUMP");
         var ranked = predictions.Rank("SoilMoisture|Silence");
-        Assert(ranked.Count == 2 && ranked[0] == new RankedFollowUp("Search:pump", 3) && ranked[1].Count == 1,
-            $"pump searched three times should rank first, got {string.Join(", ", ranked)}");
+        Assert(ranked.Count == 2 && ranked[0] == new RankedFollowUp("Search:pump", 2) && ranked[1].Count == 1,
+            $"pump searched in two separate faults should rank first, got {string.Join(", ", ranked)}");
         Assert(predictions.Rank("SoilMoisture|Silence", top: 1).Count == 1, "top limits the ranking");
         Assert(predictions.Rank("TankLevel|Spike").Count == 0, "an event never seen has no follow-ups");
         Assert(predictions.Pairs.Keys.SequenceEqual(["SoilMoisture|Silence"]), "an action with no alert open forms no pair");
@@ -439,7 +459,7 @@ internal static class SelfCheckRunner
         Assert(predictions.Suggest(outage with { Suppressed = true }) is null, "a suppressed alert gets no suggestion");
 
         // The node reports again, so the fault is closed: what the operator does now is not a reaction to it.
-        var back = DateTimeOffset.UtcNow;
+        back = DateTimeOffset.UtcNow.AddMinutes(1);
         store.Ingest(new TelemetryPacket<float>(probe.Id, 31f, probe.Category, back));
         engine.SweepForSilence(back.AddSeconds(1));
         Assert(predictions.Record(OperatorActionKind.Search, "pump").Contexts.Count == 0, "once the fault closes, actions are no longer tied to it");
@@ -450,6 +470,51 @@ internal static class SelfCheckRunner
         log.Add("prediction log: every search and command is logged with the alert that was open at the time");
         log.Add("dictionary of counters: after-X-did-Y pairs are counted and the most frequent follow-up ranks first");
         log.Add("suggestion: when a moisture alert recurs, the pump the operator keeps searching for is suggested");
+        return log;
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    private static IEnumerable<string> RunPersistenceChecks()
+    {
+        var log = new List<string>();
+        var path = Path.Combine(Path.GetTempPath(), $"smartx-predictions-{Guid.NewGuid():N}.json");
+
+        try
+        {
+            var store = new TelemetryStore();
+            var engine = new AnomalyEngine(store, new CommandService(), NullLogger<AnomalyEngine>.Instance);
+
+            var first = new PredictionService(store, engine, path);
+            var seeded = first.Insights();
+            Assert(seeded.Count >= 3 && seeded.All(i => !i.Open), "a first run starts from seeded habits, none of them open");
+            Assert(seeded.SelectMany(i => i.FollowUps).All(f => f.Count >= PredictionService.MinOccurrences), "insights list only follow-ups that are a habit");
+
+            // Learn one more, as a fault would: write straight through the counters by recording under a fault.
+            var probe = store.Register(new SensorRegistration
+            {
+                MacAddress = "A4:CF:12:9B:08:01", DisplayName = "Persist probe", DeploymentPath = "Facility A/Zone 1/Sub-Zone A",
+                Category = SensorCategory.SoilMoisture, PublishIntervalSeconds = 2
+            });
+            var heard = DateTimeOffset.UtcNow;
+            store.Ingest(new TelemetryPacket<float>(probe.Id, 31f, probe.Category, heard));
+            engine.SweepForSilence(heard.AddSeconds(8));
+            first.Record(OperatorActionKind.Search, "valve");
+            Assert(first.Insights().Any(i => i.Open && i.Devices.Contains("Persist probe")), "a learned event with a fault open now is flagged open, naming the device");
+
+            var second = new PredictionService(store, engine, path);
+            Assert(second.Rank("SoilMoisture|Silence").Any(f => f.FollowUp == "Search:valve" && f.Count == 3), "a restart reloads what was learned (seed 2 + 1 new)");
+            Assert(second.Insights().Count == first.Insights().Count, "a restart does not re-seed over saved counters");
+
+            // Reset starts the engine cold, and stays cold across a restart.
+            second.Reset();
+            Assert(second.Pairs.Count == 0 && second.Log.Count == 0 && second.Insights().Count == 0 && second.Current is null, "reset forgets everything learned");
+            Assert(new PredictionService(store, engine, path).Pairs.Count == 0, "a reset engine is not re-seeded on restart");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+
+        log.Add("persistence: first run is seeded, counters survive a restart, open faults are flagged in the insights");
         return log;
     }
     //----------------------------------------------------------------------------------------------------------------------//

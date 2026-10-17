@@ -27,6 +27,7 @@ public sealed class CommandStreamState(GatewayClient gateway) : IAsyncDisposable
     public QueueStatus? Queue { get; private set; }
     public Suggestion? Suggestion { get; private set; }
     public IReadOnlyList<TrendFlag> Trends { get; private set; } = [];
+    public IReadOnlyList<Insight> Insights { get; private set; } = [];
     public IReadOnlyList<TimelinePoint> Timeline { get; private set; } = [];
 
     // Operator choices; they persist because this object does.
@@ -47,6 +48,8 @@ public sealed class CommandStreamState(GatewayClient gateway) : IAsyncDisposable
         _hub = new HubConnectionBuilder()
             .WithUrl(new Uri(gateway.BaseAddress, "hubs/telemetry"))
             .AddJsonProtocol(options => SmartXJson.Configure(options.PayloadSerializerOptions))
+            // Reference [47]: Microsoft. ASP.NET Core SignalR .NET client - automatically reconnect. Microsoft Learn.
+            //   https://learn.microsoft.com/aspnet/core/signalr/dotnet-client#automatically-reconnect
             .WithAutomaticReconnect()
             .Build();
 
@@ -106,6 +109,7 @@ public sealed class CommandStreamState(GatewayClient gateway) : IAsyncDisposable
         Queue = await gateway.GetQueueAsync() ?? Queue;
         Commands = await gateway.GetCommandsAsync() ?? Commands;
         Trends = await gateway.GetTrendsAsync();
+        Insights = await gateway.GetInsightsAsync();
         Suggestion ??= await gateway.GetSuggestionAsync();
 
         if (!Snapshots.Any(s => s.Id == TimelineSensor))
@@ -139,6 +143,15 @@ public sealed class CommandStreamState(GatewayClient gateway) : IAsyncDisposable
     {
         await gateway.UndoCommandAsync();
         Commands = await gateway.GetCommandsAsync() ?? Commands;
+        Changed?.Invoke();
+    }
+
+    /// <summary>Forgets everything the engine has learned, so it can be shown learning from scratch.</summary>
+    public async Task ResetLearningAsync()
+    {
+        await gateway.ResetPredictionsAsync();
+        Suggestion = null;
+        Insights = await gateway.GetInsightsAsync();
         Changed?.Invoke();
     }
 

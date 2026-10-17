@@ -1,4 +1,4 @@
-# Smart-X IoT Mesh Gateway - Part 1, Task 2
+# Smart-X IoT Mesh Gateway - Part 2
 
 Ingestion API and configuration dashboard for the Smart-X hybrid IoT ecosystem: an
 ASP.NET Core Minimal API on **.NET 10** receiving multi-typed telemetry from a simulated
@@ -14,8 +14,11 @@ port** - no CORS configuration, no second terminal.
 
 ---
 
-## Youtube video link:
+## Youtube video links:
+### Part 1 video
 - https://youtu.be/FJqMu1NI1Ys 
+### Part 2 video
+- [Link]
 
 ## Quick start
 
@@ -142,6 +145,7 @@ are the Part 2 checks:
 | `SortedDictionary` | `sorted dictionary:` | packets sent 3,1,4,2 read back 1,2,3,4 |
 | `HashSet<T>` | `hash set:` | one outage raises one alert, repeat sweeps are skipped |
 | Suggestion ranking | `dictionary of counters:` and `suggestion:` | the most-repeated follow-up ranks first and is suggested |
+| Persistence and insights | `persistence:` | first run is seeded with typical habits, counters survive a restart (`storage/predictions.json`), open faults are flagged in "Automated insights" |
 
 **2. Simulate a high-priority alert (about 2 minutes).**
 
@@ -167,7 +171,14 @@ curl http://localhost:5036/api/queue
 In `recent`, the entry with `"lane": "critical"` has a `position` lower than the normal
 packets that arrived before it.
 
-**3. The other structures.** Follow the matching section: Undo in *Stack: manual override
+**3. Filter the command stream (about 1 minute).** Open <http://localhost:5036/commands>.
+In *Live feed*, pick a **Category** (for example Soil Moisture) and an **Alert state**
+(Alerting, Silent or Normal), or type in **Search** (name, id or deployment path). The
+filters combine, and the counter above the grid shows *n of N nodes*. Click **Unplug** on
+the dashboard, then filter to *Silent* to find the disconnected node. Your filters stay
+set when you leave the page and come back.
+
+**4. The other structures.** Follow the matching section: Undo in *Stack: manual override
 commands and Undo*, sorted order in *SortedDictionary: the sensor timeline*, set
 deduplication in *HashSet: disconnected nodes and open error states*, and suggestion
 ranking in *Suggest the pump after a moisture alert*.
@@ -176,8 +187,9 @@ ranking in *Suggest the pump after a moisture alert*.
 
 ## Using the console
 
-1. **Gateway** (`/`) - landing page with the three architectural pillars. Pillar 1 is
-   live; pillars 2 and 3 are visibly disabled and labelled with the Part they arrive in.
+1. **Gateway** (`/`) - landing page with the three architectural pillars. Pillars 1
+   (ingestion) and 2 (command stream) are live; pillar 3 (mesh routing) is visibly locked
+   until the final Portfolio of Evidence.
    The header shows a real measured round-trip to the API, refreshed every 10 seconds.
 2. **Ingestion** (`/ingestion`) - register a node (MAC, display name, deployment path,
    sensor category, publish interval, threshold), attach a config file, hardware log or
@@ -186,6 +198,9 @@ ranking in *Suggest the pump after a moisture alert*.
 3. **Live dashboard** (`/dashboard`) - the severity-ranked alert rail, the small-multiple
    sensor grid, the drill-down inspector, and a panel that aggregates two pump meters
    through the overloaded `+`.
+4. **Command stream** (`/commands`) - the live feed, category and alert-state filters,
+   manual override commands with Undo, ingest queue depth, the sensor timeline and the
+   suggested actions. Feed and filters survive navigation to the other pages.
 
 ### Sensor categories
 
@@ -518,6 +533,11 @@ next time the event happens the console suggests the follow-up on its own.
 
 **On the dashboard** (panel: *Search*, top of the page; *Disconnect set* lower down):
 
+0. **Start from a cold engine (optional).** In *Command stream* click **Reset learning**
+   (or `curl -X POST http://localhost:5036/api/predictions/reset`). This clears the
+   seeded habits too, so everything the engine suggests afterwards comes from what you do.
+   Repeating a search several times during one alert counts once; it counts again only
+   in the next alert, which is why steps 1-3 are repeated below.
 1. In *Disconnect set*, pick **Soil Moisture South** and click **Unplug for 60 s**. Wait
    for its *Silence* alert to appear on the rail (about ten seconds).
 2. In *Search*, type `pump` and press Enter.
@@ -643,7 +663,10 @@ ST10439147_PROG7312_SmartX_POE/
 │   ├── Topology/TopologyValidator.cs     recursive validation
 │   └── Diagnostics/SelfCheck.cs          the runnable check
 ├── ST10439147_PROG7312_SmartX_POE     ← Minimal API (assembly SmartX.Api): SignalR hub,
-│                                        mesh simulator, attachments
+│   │                                    mesh simulator, attachments
+│   └── Services/IngestQueue.cs, IngestWorker.cs   Queue<T> + PriorityQueue lanes, worker
+│       Services/CommandService.cs                 Stack<T> override history, Undo
+│       Services/PredictionService.cs              pair counts, trend flags, suggestions
 └── SmartX.Client                      ← Blazor WebAssembly console
 ```
 
@@ -696,6 +719,7 @@ Base path `/api`. Enums travel as names.
 | `GET` | `/predictions/log` | Every search and command (newest first) with the faults it was counted against |
 | `GET` | `/predictions/pairs` | The dictionary of counters: every event seen, each with its follow-ups ranked |
 | `GET` | `/predictions/rank?context=&top=` | The top follow-ups to one event, e.g. `context=SoilMoisture%7CSilence` |
+| `POST` | `/predictions/reset` | Forgets everything learned (including the seeded habits) so the engine starts cold |
 | `GET` | `/predictions/suggestion` | The suggestion for the alert driving the operator now - 204 when there is none |
 | `GET` | `/predictions/trends` | Devices under their threshold but projected to cross it within three minutes, soonest first |
 | `POST` | `/sensors/{id}/drift?perSecond=` | Test trigger: the simulated node's reading climbs; omit the rate to reach the threshold in ~90 s, `perSecond=0` to stop |
@@ -757,17 +781,19 @@ On Linux or macOS, `openssl rand -base64 32` does the same job.
 
 ## Known scope
 
-Telemetry is **simulated** - `MeshSimulator` stands in for the MQTT feed, injecting value
-spikes and node disconnects so the alerting path has something real to catch. There is no
-HTTP telemetry endpoint; the simulator calls `TelemetryStore.Ingest` directly, so a real
-broker would plug in at that one call and nothing downstream changes.
+Telemetry is **simulated** - `MeshSimulator` stands in for the physical devices, injecting
+value spikes and node disconnects so the alerting path has something real to catch. It
+reaches the gateway the way a device would: every reading is an HTTP `POST /api/telemetry`,
+which enters the ingest queue and is processed by the background worker. A real ESP32 would
+post to the same endpoint and nothing downstream changes.
 
 Gateway state is **in memory** and resets on restart: registered nodes, history and alerts
 are lost, and the 13 seeded nodes come back. Uploaded files stay on disk, encrypted, but
 their metadata is in memory too, so after a restart the API no longer lists or serves
 them. What the predictive engine has learned is in memory as well, so its counters start
 empty after a restart and the moisture-then-pump pattern has to be taught again.
-Persistence, the command stream and mesh routing arrive in Part 2 and the final PoE.
+Pillar 3 (Network Topology and Mesh Routing) and persistence are out of scope for this
+part and arrive in the final PoE.
 
 # References
 - [1] Microsoft. *Generics in C#*. Microsoft Learn. https://learn.microsoft.com/dotnet/csharp/fundamentals/types/generics
@@ -808,4 +834,15 @@ Persistence, the command stream and mesh routing arrive in Part 2 and the final 
 - [36] Microsoft. *Dictionary<TKey,TValue> Class*. Microsoft Learn. https://learn.microsoft.com/dotnet/api/system.collections.generic.dictionary-2
 - [37] Wikipedia. *Simple linear regression*. https://en.wikipedia.org/wiki/Simple_linear_regression
 - [38] Wikipedia. *Coefficient of determination*. https://en.wikipedia.org/wiki/Coefficient_of_determination
+- [39] Microsoft. *Lock Class (System.Threading)*. Microsoft Learn. https://learn.microsoft.com/dotnet/api/system.threading.lock
+- [40] Microsoft. *SemaphoreSlim Class*. Microsoft Learn. https://learn.microsoft.com/dotnet/api/system.threading.semaphoreslim
+- [41] Microsoft. *PeriodicTimer Class*. Microsoft Learn. https://learn.microsoft.com/dotnet/api/system.threading.periodictimer
+- [42] Microsoft. *IncrementalHash Class*. Microsoft Learn. https://learn.microsoft.com/dotnet/api/system.security.cryptography.incrementalhash
+- [43] Microsoft. *BinaryPrimitives Class*. Microsoft Learn. https://learn.microsoft.com/dotnet/api/system.buffers.binary.binaryprimitives
+- [44] Microsoft. *Interlocked Class*. Microsoft Learn. https://learn.microsoft.com/dotnet/api/system.threading.interlocked
+- [45] Microsoft. *ASP.NET Core Blazor file uploads (InputFile)*. Microsoft Learn. https://learn.microsoft.com/aspnet/core/blazor/file-uploads
+- [46] Microsoft. *UTF8Encoding Constructor (throwOnInvalidBytes)*. Microsoft Learn. https://learn.microsoft.com/dotnet/api/system.text.utf8encoding.-ctor
+- [47] Microsoft. *ASP.NET Core SignalR .NET client - automatically reconnect*. Microsoft Learn. https://learn.microsoft.com/aspnet/core/signalr/dotnet-client#automatically-reconnect
+- [48] Microsoft. *Random.Shuffle Method*. Microsoft Learn. https://learn.microsoft.com/dotnet/api/system.random.shuffle
+- [49] Microsoft. *Validator.TryValidateObject Method*. Microsoft Learn. https://learn.microsoft.com/dotnet/api/system.componentmodel.dataannotations.validator.tryvalidateobject
 

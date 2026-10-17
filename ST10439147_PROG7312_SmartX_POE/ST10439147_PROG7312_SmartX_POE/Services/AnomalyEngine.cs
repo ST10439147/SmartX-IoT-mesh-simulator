@@ -63,6 +63,8 @@ public sealed class AnomalyEngine(TelemetryStore store, CommandService commands,
     //   https://learn.microsoft.com/dotnet/api/system.collections.generic.hashset-1
     private readonly HashSet<string> _disconnected = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _activeErrors = new(StringComparer.OrdinalIgnoreCase);
+    // Reference [39]: Microsoft. Lock Class (System.Threading). Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/api/system.threading.lock
     private readonly Lock _gate = new();
     private long _duplicatesSkipped;
 

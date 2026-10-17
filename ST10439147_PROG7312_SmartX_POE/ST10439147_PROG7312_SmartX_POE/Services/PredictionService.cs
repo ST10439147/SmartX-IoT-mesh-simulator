@@ -1,3 +1,4 @@
+using System.Text.Json;
 using SmartX.Shared.Telemetry;
 
 namespace SmartX.Api.Services;
@@ -35,11 +36,11 @@ public sealed record OperatorAction(
 /// </summary>
 // ponytail: the log keeps the last MaxLog actions only - enough to inspect what was learned.
 // The counters are not capped and outlive the log. Persist both if predictions have to survive a restart.
-// ponytail: an action counts every time it is made, so searching "pump" twice during one alert
-// counts twice. Count once per alert id if repeat clicks start skewing the ranking.
+// An action counts once per fault: searching "pump" five times during one moisture alert is one
+// habit, not five. The same search during the next alert counts again.
 // Reference [36]: Microsoft. Dictionary<TKey,TValue> Class. Microsoft Learn.
 //   https://learn.microsoft.com/dotnet/api/system.collections.generic.dictionary-2
-public sealed class PredictionService(TelemetryStore store, AnomalyEngine anomalies)
+public sealed class PredictionService
 {
     public const int MaxLog = 500;
 
@@ -53,9 +54,72 @@ public sealed class PredictionService(TelemetryStore store, AnomalyEngine anomal
     public const int MinOccurrences = 2;
 
     private readonly Queue<OperatorAction> _log = new();
+
+    // "sensor|kind>>follow-up" for every pair already counted during a fault that is still open.
+    // Entries are dropped when their fault closes, so the next occurrence counts afresh.
+    private readonly HashSet<string> _counted = new(StringComparer.OrdinalIgnoreCase);
     private Suggestion? _latest;
     private readonly Dictionary<string, Dictionary<string, int>> _pairs = new(StringComparer.OrdinalIgnoreCase);
+    // Reference [39]: Microsoft. Lock Class (System.Threading). Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/api/system.threading.lock
     private readonly Lock _gate = new();
+    private readonly TelemetryStore store;
+    private readonly AnomalyEngine anomalies;
+    private readonly string? _path;
+
+    /// <summary>
+    /// With a <paramref name="persistPath"/> the learned counters survive a restart: they
+    /// are loaded from it, and the very first run (no file yet) starts from a few typical
+    /// operator habits so the panel has something real to show before anyone has clicked.
+    /// Without one (the self-checks) the engine starts empty and touches no disk.
+    /// </summary>
+    public PredictionService(TelemetryStore store, AnomalyEngine anomalies, string? persistPath = null)
+    {
+        this.store = store;
+        this.anomalies = anomalies;
+        _path = persistPath is null ? null : Path.GetFullPath(persistPath);
+
+        if (_path is null) return;
+
+        try
+        {
+            if (File.Exists(_path))
+            {
+                var saved = JsonSerializer.Deserialize<Dictionary<string, Dictionary<string, int>>>(File.ReadAllText(_path)) ?? [];
+                foreach (var (context, row) in saved) _pairs[context] = new(row, StringComparer.OrdinalIgnoreCase);
+                return;
+            }
+        }
+        catch (Exception e) when (e is IOException or JsonException or UnauthorizedAccessException)
+        {
+            _pairs.Clear();   // ponytail: a corrupt file is discarded, not repaired - the engine relearns
+        }
+
+        Seed("PumpPower|Spike", ("Search:pump", 4), ("Command:Switch Booster Pump off", 3));
+        Seed("SoilMoisture|ThresholdBreach", ("Search:pump", 3), ("Command:Switch Borehole Pump on", 2));
+        Seed("SoilMoisture|Silence", ("Search:valve", 2));
+        Save();
+    }
+
+    private void Seed(string context, params (string FollowUp, int Count)[] habits)
+        => _pairs[context] = new(habits.ToDictionary(h => h.FollowUp, h => h.Count), StringComparer.OrdinalIgnoreCase);
+
+    // Written under the lock, to a temp file then moved over, so a crash mid-write cannot leave half a file.
+    private void Save()
+    {
+        if (_path is null) return;
+
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
+            File.WriteAllText(_path + ".tmp", JsonSerializer.Serialize(_pairs));
+            File.Move(_path + ".tmp", _path, overwrite: true);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            // Learning still works in memory; it just will not outlive this run.
+        }
+    }
 
     /// <summary>Logged actions, newest first.</summary>
     public IReadOnlyList<OperatorAction> Log
@@ -91,22 +155,52 @@ public sealed class PredictionService(TelemetryStore store, AnomalyEngine anomal
     {
         // "Pump" and "pump " are the same search; command labels are generated, so already stable.
         target = kind == OperatorActionKind.Search ? target.Trim().ToLowerInvariant() : target;
-        var action = new OperatorAction(DateTimeOffset.UtcNow, kind, target, OpenContexts());
+        var faults = OpenFaultKeys();
+        var action = new OperatorAction(DateTimeOffset.UtcNow, kind, target, faults.Select(f => f.Context).Distinct().Order().ToList());
 
         lock (_gate)
         {
             _log.Enqueue(action);
             if (_log.Count > MaxLog) _log.Dequeue();
 
-            // "After event X, the operator did Y": one more for each open X. Nothing open, no pair.
-            foreach (var context in action.Contexts)
+            // A fault that has closed is forgotten, so its next occurrence can be counted again.
+            var openKeys = faults.Select(f => f.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            _counted.RemoveWhere(c => !openKeys.Contains(c[..c.IndexOf(">>", StringComparison.Ordinal)]));
+
+            // "After event X, the operator did Y": one more for each open X, once per fault.
+            // Nothing open, no pair.
+            var counted = false;
+            foreach (var group in faults.GroupBy(f => f.Context))
             {
-                if (!_pairs.TryGetValue(context, out var row)) _pairs[context] = row = new(StringComparer.OrdinalIgnoreCase);
+                // Add every key (no short-circuit) so none is left uncounted for next time.
+                var fresh = group.Select(f => _counted.Add($"{f.Key}>>{action.FollowUp}")).ToList().Contains(true);
+                if (!fresh) continue;
+
+                if (!_pairs.TryGetValue(group.Key, out var row)) _pairs[group.Key] = row = new(StringComparer.OrdinalIgnoreCase);
                 row[action.FollowUp] = row.GetValueOrDefault(action.FollowUp) + 1;
+                counted = true;
             }
+
+            if (counted) Save();
         }
 
         return action;
+    }
+
+    /// <summary>
+    /// Forgets everything learned and the action log, and clears the saved file: the engine
+    /// starts cold, so the next suggestions come only from what the operator does from now on.
+    /// </summary>
+    public void Reset()
+    {
+        lock (_gate)
+        {
+            _pairs.Clear();
+            _log.Clear();
+            _counted.Clear();
+            _latest = null;
+            Save();
+        }
     }
     //----------------------------------------------------------------------------------------------------------------------//
     /// <summary>
@@ -116,6 +210,9 @@ public sealed class PredictionService(TelemetryStore store, AnomalyEngine anomal
     /// </summary>
     public Suggestion? Suggest(Alert alert)
     {
+        // A freshly raised alert is a new fault: whatever was counted for its last run no longer applies.
+        lock (_gate) _counted.RemoveWhere(c => c.StartsWith($"{alert.SensorId}|{alert.Kind}>>", StringComparison.OrdinalIgnoreCase));
+
         if (!Actionable(alert) || !store.TryGet(alert.SensorId, out var sensor)) return null;
 
         var context = ContextKey(sensor, alert);
@@ -143,7 +240,8 @@ public sealed class PredictionService(TelemetryStore store, AnomalyEngine anomal
     /// at once, while the moisture problem the operator is reacting to is still open.
     /// Kinds the operator has suppressed are left out: they have said those are noise.
     /// </summary>
-    private IReadOnlyList<string> OpenContexts()
+    /// <summary>Each open fault: its key (<c>sensor|kind</c>), its context (<c>Category|kind</c>) and the device name.</summary>
+    private List<(string Key, string Context, string Name)> OpenFaultKeys()
     {
         var suppressed = anomalies.Ranked()
             .Where(a => a.Suppressed)
@@ -152,14 +250,56 @@ public sealed class PredictionService(TelemetryStore store, AnomalyEngine anomal
 
         var open = anomalies.Disconnected.Select(id => $"{id}|{AlertKind.Silence}").Concat(anomalies.ActiveErrors);
 
-        var contexts = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+        var faults = new List<(string, string, string)>();
         foreach (var key in open.Where(k => !suppressed.Contains(k)))
         {
             var bar = key.IndexOf('|');
-            if (store.TryGet(key[..bar], out var sensor)) contexts.Add($"{sensor.Category}|{key[(bar + 1)..]}");
+            if (!store.TryGet(key[..bar], out var sensor)) continue;
+
+            faults.Add((key, $"{sensor.Category}|{key[(bar + 1)..]}", sensor.DisplayName));
         }
 
-        return contexts.ToList();
+        return faults;
+    }
+
+    /// <summary>Open fault contexts, each with the names of the devices in it.</summary>
+    private SortedDictionary<string, List<string>> OpenFaults()
+    {
+        var contexts = new SortedDictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (_, context, name) in OpenFaultKeys())
+        {
+            if (!contexts.TryGetValue(context, out var names)) contexts[context] = names = [];
+            names.Add(name);
+        }
+
+        return contexts;
+    }
+
+    /// <summary>
+    /// Every event that has a habit attached (done at least <see cref="MinOccurrences"/> times),
+    /// the ones with a fault open right now first, each with its follow-ups ranked. Unlike
+    /// <see cref="Current"/> this is not one alert deep or on a timer: it is what the engine
+    /// would suggest for every alert it has learned, so the panel is never empty.
+    /// </summary>
+    public IReadOnlyList<Insight> Insights()
+    {
+        var open = OpenFaults();
+
+        lock (_gate)
+            return _pairs.Keys
+                .Select(context => (context, habits: RankLocked(context, 3).Where(f => f.Count >= MinOccurrences).ToList()))
+                .Where(x => x.habits.Count > 0)
+                .Select(x => new Insight(x.context, Describe(x.context), open.GetValueOrDefault(x.context) ?? [], open.ContainsKey(x.context), x.habits))
+                .OrderByDescending(i => i.Open).ThenByDescending(i => i.FollowUps[0].Count).ThenBy(i => i.Context, StringComparer.Ordinal)
+                .ToList();
+    }
+
+    // "PumpPower|Spike" reads as "Pump power draw - Spike" in the UI.
+    private static string Describe(string context)
+    {
+        var bar = context.IndexOf((char)124);
+        var kind = context[(bar + 1)..];
+        return Enum.TryParse<SensorCategory>(context[..bar], out var category) ? $"{category.Spec().Label} - {kind}" : context;
     }
 
     //----------------------------------------------------------------------------------------------------------------------//

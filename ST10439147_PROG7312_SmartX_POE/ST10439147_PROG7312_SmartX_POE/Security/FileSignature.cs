@@ -60,6 +60,8 @@ public static class FileSignature
             try
             {
                 // Throws on malformed sequences rather than substituting U+FFFD.
+                // Reference [46]: Microsoft. UTF8Encoding Constructor (throwOnInvalidBytes). Microsoft Learn.
+                //   https://learn.microsoft.com/dotnet/api/system.text.utf8encoding.-ctor
                 new UTF8Encoding(false, throwOnInvalidBytes: true).GetString(head);
             }
             catch (DecoderFallbackException)

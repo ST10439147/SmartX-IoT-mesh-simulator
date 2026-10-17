@@ -100,6 +100,8 @@ public sealed class MeshSimulator(
 
         logger.LogInformation("Mesh simulator seeded {Count} nodes, warmed {Ticks} ticks", store.Sensors.Count, WarmupTicks);
 
+        // Reference [41]: Microsoft. PeriodicTimer Class. Microsoft Learn.
+        //   https://learn.microsoft.com/dotnet/api/system.threading.periodictimer
         using var timer = new PeriodicTimer(Tick);
         var elapsed = WarmupTicks;
 

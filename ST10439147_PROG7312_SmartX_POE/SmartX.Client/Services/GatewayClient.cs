@@ -80,6 +80,9 @@ public sealed class GatewayClient(HttpClient http)
     public async Task RestoreAsync(string sensorId, AlertKind kind, CancellationToken ct = default)
         => await http.PostAsJsonAsync("api/alerts/restore", new { sensorId, kind }, SmartXJson.Options, ct);
 
+    public async Task ResetPredictionsAsync(CancellationToken ct = default)
+        => await http.PostAsync("api/predictions/reset", null, ct);
+
     public async Task<IReadOnlyList<AttachmentInfo>> GetAttachmentsAsync(string sensorId, CancellationToken ct = default)
         => await http.GetFromJsonAsync<List<AttachmentInfo>>($"api/sensors/{sensorId}/attachments", SmartXJson.Options, ct) ?? [];
 //----------------------------------------------------------------------------------------------------------------------//
@@ -201,6 +204,18 @@ public sealed class GatewayClient(HttpClient http)
         try
         {
             return await http.GetFromJsonAsync<List<TrendFlag>>("api/predictions/trends", SmartXJson.Options, ct) ?? [];
+        }
+        catch (HttpRequestException)
+        {
+            return [];
+        }
+    }
+
+    public async Task<IReadOnlyList<Insight>> GetInsightsAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            return await http.GetFromJsonAsync<List<Insight>>("api/predictions/insights", SmartXJson.Options, ct) ?? [];
         }
         catch (HttpRequestException)
         {

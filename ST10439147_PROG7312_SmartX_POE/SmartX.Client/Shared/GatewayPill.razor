@@ -30,6 +30,8 @@
     {
         await PingAsync();
 
+        // Reference [41]: Microsoft. PeriodicTimer Class. Microsoft Learn.
+        //   https://learn.microsoft.com/dotnet/api/system.threading.periodictimer
         _timer = new PeriodicTimer(Interval);
         _ = PollAsync();
     }

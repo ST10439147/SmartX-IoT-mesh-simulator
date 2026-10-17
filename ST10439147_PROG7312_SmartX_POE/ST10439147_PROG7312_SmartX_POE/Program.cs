@@ -35,7 +35,8 @@ builder.Services.AddSingleton<AnomalyEngine>();
 builder.Services.AddSingleton<AttachmentService>();
 builder.Services.AddSingleton<IngestQueue>();
 builder.Services.AddSingleton<CommandService>();
-builder.Services.AddSingleton<PredictionService>();
+builder.Services.AddSingleton(services => new PredictionService(
+    services.GetRequiredService<TelemetryStore>(), services.GetRequiredService<AnomalyEngine>(), "storage/predictions.json"));
 // Reference [23]: Microsoft. Background tasks with hosted services in ASP.NET Core. Microsoft Learn.
 //   https://learn.microsoft.com/aspnet/core/fundamentals/host/hosted-services
 builder.Services.AddHostedService<IngestWorker>();
@@ -300,6 +301,13 @@ api.MapPost("/commands/undo", (CommandService commands, PredictionService predic
 // on the rail when it was made. A null context means nothing was alerting.
 api.MapGet("/predictions/log", (PredictionService predictions) => predictions.Log);
 
+// Forgets everything learned so the engine can be shown learning from scratch.
+api.MapPost("/predictions/reset", (PredictionService predictions) =>
+{
+    predictions.Reset();
+    return Results.NoContent();
+});
+
 // The dictionary of counters: every event seen, each with its follow-ups ranked.
 api.MapGet("/predictions/pairs", (PredictionService predictions) => predictions.Pairs);
 
@@ -308,6 +316,9 @@ api.MapGet("/predictions/pairs", (PredictionService predictions) => predictions.
 // HubEvents.SuggestionReady the moment their alert is raised.
 api.MapGet("/predictions/suggestion", (PredictionService predictions) =>
     predictions.Current is { } suggestion ? Results.Ok(suggestion) : Results.NoContent());
+
+// Every learned event with its ranked follow-ups, open faults first; seeded on first run and kept across restarts.
+api.MapGet("/predictions/insights", (PredictionService predictions) => predictions.Insights());
 
 // Devices under their threshold but projected to cross it within the trend horizon, soonest first.
 api.MapGet("/predictions/trends", (PredictionService predictions) => predictions.TrendFlags());
@@ -358,6 +369,8 @@ api.MapPost("/sensors/{id}/timeline/scramble", (string id, TelemetryStore store,
         .ToArray();
 
     // Oldest-first would be in order. A shuffle can land on that, so turn it round if it does.
+    // Reference [48]: Microsoft. Random.Shuffle Method. Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/api/system.random.shuffle
     Random.Shared.Shuffle(sent);
     if (sent.SequenceEqual(sent.Order())) Array.Reverse(sent);
 
@@ -566,6 +579,8 @@ return 0;
 static Dictionary<string, string[]> Validate(object model)
 {
     var results = new List<ValidationResult>();
+    // Reference [49]: Microsoft. Validator.TryValidateObject Method. Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/api/system.componentmodel.dataannotations.validator.tryvalidateobject
     Validator.TryValidateObject(model, new ValidationContext(model), results, validateAllProperties: true);
 
     return results
