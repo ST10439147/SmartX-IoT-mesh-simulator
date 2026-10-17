@@ -533,6 +533,11 @@ next time the event happens the console suggests the follow-up on its own.
 
 **On the dashboard** (panel: *Search*, top of the page; *Disconnect set* lower down):
 
+0. **Start from a cold engine (optional).** In *Command stream* click **Reset learning**
+   (or `curl -X POST http://localhost:5036/api/predictions/reset`). This clears the
+   seeded habits too, so everything the engine suggests afterwards comes from what you do.
+   Repeating a search several times during one alert counts once; it counts again only
+   in the next alert, which is why steps 1-3 are repeated below.
 1. In *Disconnect set*, pick **Soil Moisture South** and click **Unplug for 60 s**. Wait
    for its *Silence* alert to appear on the rail (about ten seconds).
 2. In *Search*, type `pump` and press Enter.
@@ -714,6 +719,7 @@ Base path `/api`. Enums travel as names.
 | `GET` | `/predictions/log` | Every search and command (newest first) with the faults it was counted against |
 | `GET` | `/predictions/pairs` | The dictionary of counters: every event seen, each with its follow-ups ranked |
 | `GET` | `/predictions/rank?context=&top=` | The top follow-ups to one event, e.g. `context=SoilMoisture%7CSilence` |
+| `POST` | `/predictions/reset` | Forgets everything learned (including the seeded habits) so the engine starts cold |
 | `GET` | `/predictions/suggestion` | The suggestion for the alert driving the operator now - 204 when there is none |
 | `GET` | `/predictions/trends` | Devices under their threshold but projected to cross it within three minutes, soonest first |
 | `POST` | `/sensors/{id}/drift?perSecond=` | Test trigger: the simulated node's reading climbs; omit the rate to reach the threshold in ~90 s, `perSecond=0` to stop |

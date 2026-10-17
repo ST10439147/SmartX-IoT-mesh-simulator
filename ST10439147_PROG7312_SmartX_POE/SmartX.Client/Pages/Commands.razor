@@ -147,6 +147,7 @@
     <section class="panel">
         <div class="panel-head">
             <h2>Suggested actions</h2>
+            <button class="tiny" title="Forget everything learned so the engine starts from scratch" @onclick="Stream.ResetLearningAsync">Reset learning</button>
         </div>
 
         @if (LiveSuggestion is { } suggestion)

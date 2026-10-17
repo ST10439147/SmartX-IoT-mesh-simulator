@@ -36,8 +36,8 @@ public sealed record OperatorAction(
 /// </summary>
 // ponytail: the log keeps the last MaxLog actions only - enough to inspect what was learned.
 // The counters are not capped and outlive the log. Persist both if predictions have to survive a restart.
-// ponytail: an action counts every time it is made, so searching "pump" twice during one alert
-// counts twice. Count once per alert id if repeat clicks start skewing the ranking.
+// An action counts once per fault: searching "pump" five times during one moisture alert is one
+// habit, not five. The same search during the next alert counts again.
 // Reference [36]: Microsoft. Dictionary<TKey,TValue> Class. Microsoft Learn.
 //   https://learn.microsoft.com/dotnet/api/system.collections.generic.dictionary-2
 public sealed class PredictionService
@@ -54,6 +54,10 @@ public sealed class PredictionService
     public const int MinOccurrences = 2;
 
     private readonly Queue<OperatorAction> _log = new();
+
+    // "sensor|kind>>follow-up" for every pair already counted during a fault that is still open.
+    // Entries are dropped when their fault closes, so the next occurrence counts afresh.
+    private readonly HashSet<string> _counted = new(StringComparer.OrdinalIgnoreCase);
     private Suggestion? _latest;
     private readonly Dictionary<string, Dictionary<string, int>> _pairs = new(StringComparer.OrdinalIgnoreCase);
     // Reference [39]: Microsoft. Lock Class (System.Threading). Microsoft Learn.
@@ -151,24 +155,52 @@ public sealed class PredictionService
     {
         // "Pump" and "pump " are the same search; command labels are generated, so already stable.
         target = kind == OperatorActionKind.Search ? target.Trim().ToLowerInvariant() : target;
-        var action = new OperatorAction(DateTimeOffset.UtcNow, kind, target, OpenContexts());
+        var faults = OpenFaultKeys();
+        var action = new OperatorAction(DateTimeOffset.UtcNow, kind, target, faults.Select(f => f.Context).Distinct().Order().ToList());
 
         lock (_gate)
         {
             _log.Enqueue(action);
             if (_log.Count > MaxLog) _log.Dequeue();
 
-            // "After event X, the operator did Y": one more for each open X. Nothing open, no pair.
-            foreach (var context in action.Contexts)
+            // A fault that has closed is forgotten, so its next occurrence can be counted again.
+            var openKeys = faults.Select(f => f.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            _counted.RemoveWhere(c => !openKeys.Contains(c[..c.IndexOf(">>", StringComparison.Ordinal)]));
+
+            // "After event X, the operator did Y": one more for each open X, once per fault.
+            // Nothing open, no pair.
+            var counted = false;
+            foreach (var group in faults.GroupBy(f => f.Context))
             {
-                if (!_pairs.TryGetValue(context, out var row)) _pairs[context] = row = new(StringComparer.OrdinalIgnoreCase);
+                // Add every key (no short-circuit) so none is left uncounted for next time.
+                var fresh = group.Select(f => _counted.Add($"{f.Key}>>{action.FollowUp}")).ToList().Contains(true);
+                if (!fresh) continue;
+
+                if (!_pairs.TryGetValue(group.Key, out var row)) _pairs[group.Key] = row = new(StringComparer.OrdinalIgnoreCase);
                 row[action.FollowUp] = row.GetValueOrDefault(action.FollowUp) + 1;
+                counted = true;
             }
 
-            if (action.Contexts.Count > 0) Save();
+            if (counted) Save();
         }
 
         return action;
+    }
+
+    /// <summary>
+    /// Forgets everything learned and the action log, and clears the saved file: the engine
+    /// starts cold, so the next suggestions come only from what the operator does from now on.
+    /// </summary>
+    public void Reset()
+    {
+        lock (_gate)
+        {
+            _pairs.Clear();
+            _log.Clear();
+            _counted.Clear();
+            _latest = null;
+            Save();
+        }
     }
     //----------------------------------------------------------------------------------------------------------------------//
     /// <summary>
@@ -178,6 +210,9 @@ public sealed class PredictionService
     /// </summary>
     public Suggestion? Suggest(Alert alert)
     {
+        // A freshly raised alert is a new fault: whatever was counted for its last run no longer applies.
+        lock (_gate) _counted.RemoveWhere(c => c.StartsWith($"{alert.SensorId}|{alert.Kind}>>", StringComparison.OrdinalIgnoreCase));
+
         if (!Actionable(alert) || !store.TryGet(alert.SensorId, out var sensor)) return null;
 
         var context = ContextKey(sensor, alert);
@@ -205,10 +240,8 @@ public sealed class PredictionService
     /// at once, while the moisture problem the operator is reacting to is still open.
     /// Kinds the operator has suppressed are left out: they have said those are noise.
     /// </summary>
-    private IReadOnlyList<string> OpenContexts() => OpenFaults().Keys.ToList();
-
-    /// <summary>Open fault contexts, each with the names of the devices in it.</summary>
-    private SortedDictionary<string, List<string>> OpenFaults()
+    /// <summary>Each open fault: its key (<c>sensor|kind</c>), its context (<c>Category|kind</c>) and the device name.</summary>
+    private List<(string Key, string Context, string Name)> OpenFaultKeys()
     {
         var suppressed = anomalies.Ranked()
             .Where(a => a.Suppressed)
@@ -217,15 +250,26 @@ public sealed class PredictionService
 
         var open = anomalies.Disconnected.Select(id => $"{id}|{AlertKind.Silence}").Concat(anomalies.ActiveErrors);
 
-        var contexts = new SortedDictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        var faults = new List<(string, string, string)>();
         foreach (var key in open.Where(k => !suppressed.Contains(k)))
         {
             var bar = key.IndexOf('|');
             if (!store.TryGet(key[..bar], out var sensor)) continue;
 
-            var context = $"{sensor.Category}|{key[(bar + 1)..]}";
+            faults.Add((key, $"{sensor.Category}|{key[(bar + 1)..]}", sensor.DisplayName));
+        }
+
+        return faults;
+    }
+
+    /// <summary>Open fault contexts, each with the names of the devices in it.</summary>
+    private SortedDictionary<string, List<string>> OpenFaults()
+    {
+        var contexts = new SortedDictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (_, context, name) in OpenFaultKeys())
+        {
             if (!contexts.TryGetValue(context, out var names)) contexts[context] = names = [];
-            names.Add(sensor.DisplayName);
+            names.Add(name);
         }
 
         return contexts;

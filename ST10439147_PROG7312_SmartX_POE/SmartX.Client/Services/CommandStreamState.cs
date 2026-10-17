@@ -146,6 +146,15 @@ public sealed class CommandStreamState(GatewayClient gateway) : IAsyncDisposable
         Changed?.Invoke();
     }
 
+    /// <summary>Forgets everything the engine has learned, so it can be shown learning from scratch.</summary>
+    public async Task ResetLearningAsync()
+    {
+        await gateway.ResetPredictionsAsync();
+        Suggestion = null;
+        Insights = await gateway.GetInsightsAsync();
+        Changed?.Invoke();
+    }
+
     public bool HasOpenAlert(string sensorId) => Alerts.Any(a => a.SensorId == sensorId && !a.Suppressed);
 
     public bool Matches(SensorSnapshot s)

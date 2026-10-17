@@ -301,6 +301,13 @@ api.MapPost("/commands/undo", (CommandService commands, PredictionService predic
 // on the rail when it was made. A null context means nothing was alerting.
 api.MapGet("/predictions/log", (PredictionService predictions) => predictions.Log);
 
+// Forgets everything learned so the engine can be shown learning from scratch.
+api.MapPost("/predictions/reset", (PredictionService predictions) =>
+{
+    predictions.Reset();
+    return Results.NoContent();
+});
+
 // The dictionary of counters: every event seen, each with its follow-ups ranked.
 api.MapGet("/predictions/pairs", (PredictionService predictions) => predictions.Pairs);
 

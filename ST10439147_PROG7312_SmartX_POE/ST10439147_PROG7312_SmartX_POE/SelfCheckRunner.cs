@@ -422,18 +422,29 @@ internal static class SelfCheckRunner
         Assert(search.Contexts.SequenceEqual(["SoilMoisture|Silence"]),
             $"a search during a moisture outage should carry that fault, got '{string.Join(", ", search.Contexts)}'");
         Assert(search.FollowUp == "Search:pump", "search terms are normalised so 'Pump ' and 'pump' are one follow-up");
+
+        // Repeating an action during the same fault is one habit, not several.
+        predictions.Record(OperatorActionKind.Search, "pump");
+        predictions.Record(OperatorActionKind.Search, "PUMP");
+        Assert(predictions.Rank("SoilMoisture|Silence").Single().Count == 1, "repeats during one fault should count once");
         Assert(predictions.Suggest(outage) is null, "one search is not a habit yet, so nothing is suggested");
 
         var command = predictions.Record(OperatorActionKind.Command, "Switch Borehole Pump on");
         Assert(command.FollowUp == "Command:Switch Borehole Pump on", "command labels are kept as issued");
-        Assert(predictions.Log[0] == command && predictions.Log.Count == 3, "the log is newest first and holds every action");
+        Assert(predictions.Log[0] == command && predictions.Log.Count == 5, "the log is newest first and holds every action");
 
-        // The pattern repeats: more pump searches under the same alert. Pump outranks the command.
+        // The fault closes and a new one opens: the same search now counts again. Pump outranks the command.
+        var back = DateTimeOffset.UtcNow;
+        store.Ingest(new TelemetryPacket<float>(probe.Id, 31f, probe.Category, back));
+        engine.SweepForSilence(back.AddSeconds(1));
+        store.Ingest(new TelemetryPacket<float>(probe.Id, 31f, probe.Category, back.AddSeconds(30)));
+        var secondOutage = engine.SweepForSilence(back.AddSeconds(38))[0];
+        predictions.Suggest(secondOutage);   // raising the alert is what starts a new count
         predictions.Record(OperatorActionKind.Search, "pump");
         predictions.Record(OperatorActionKind.Search, "PUMP");
         var ranked = predictions.Rank("SoilMoisture|Silence");
-        Assert(ranked.Count == 2 && ranked[0] == new RankedFollowUp("Search:pump", 3) && ranked[1].Count == 1,
-            $"pump searched three times should rank first, got {string.Join(", ", ranked)}");
+        Assert(ranked.Count == 2 && ranked[0] == new RankedFollowUp("Search:pump", 2) && ranked[1].Count == 1,
+            $"pump searched in two separate faults should rank first, got {string.Join(", ", ranked)}");
         Assert(predictions.Rank("SoilMoisture|Silence", top: 1).Count == 1, "top limits the ranking");
         Assert(predictions.Rank("TankLevel|Spike").Count == 0, "an event never seen has no follow-ups");
         Assert(predictions.Pairs.Keys.SequenceEqual(["SoilMoisture|Silence"]), "an action with no alert open forms no pair");
@@ -448,7 +459,7 @@ internal static class SelfCheckRunner
         Assert(predictions.Suggest(outage with { Suppressed = true }) is null, "a suppressed alert gets no suggestion");
 
         // The node reports again, so the fault is closed: what the operator does now is not a reaction to it.
-        var back = DateTimeOffset.UtcNow;
+        back = DateTimeOffset.UtcNow.AddMinutes(1);
         store.Ingest(new TelemetryPacket<float>(probe.Id, 31f, probe.Category, back));
         engine.SweepForSilence(back.AddSeconds(1));
         Assert(predictions.Record(OperatorActionKind.Search, "pump").Contexts.Count == 0, "once the fault closes, actions are no longer tied to it");
@@ -492,6 +503,11 @@ internal static class SelfCheckRunner
             var second = new PredictionService(store, engine, path);
             Assert(second.Rank("SoilMoisture|Silence").Any(f => f.FollowUp == "Search:valve" && f.Count == 3), "a restart reloads what was learned (seed 2 + 1 new)");
             Assert(second.Insights().Count == first.Insights().Count, "a restart does not re-seed over saved counters");
+
+            // Reset starts the engine cold, and stays cold across a restart.
+            second.Reset();
+            Assert(second.Pairs.Count == 0 && second.Log.Count == 0 && second.Insights().Count == 0 && second.Current is null, "reset forgets everything learned");
+            Assert(new PredictionService(store, engine, path).Pairs.Count == 0, "a reset engine is not re-seeded on restart");
         }
         finally
         {
