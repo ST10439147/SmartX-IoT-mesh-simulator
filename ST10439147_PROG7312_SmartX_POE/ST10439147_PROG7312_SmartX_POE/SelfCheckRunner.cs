@@ -302,6 +302,12 @@ internal static class SelfCheckRunner
         Assert(timeline.Select(p => p.Sequence).SequenceEqual([2, 4, 1, 3]), "each point should still say when it arrived");
         Assert(store.Timeline(probe.Id, 2).Select(p => p.Value).SequenceEqual([3, 4]), "asking for 2 samples should return the newest 2");
 
+        // Two readings with the same timestamp are both kept, in arrival order.
+        var tie = start.AddSeconds(50);
+        store.LogReading(probe.Id, tie, 50, sequence: 10);
+        store.LogReading(probe.Id, tie, 51, sequence: 11);
+        Assert(store.Timeline(probe.Id, 2).Select(p => p.Value).SequenceEqual([50, 51]), "same-timestamp readings should both be kept");
+
         // Bounded: flood it past capacity and only the newest readings are left.
         for (var i = 0; i < TelemetryStore.TimelineCapacity + 10; i++)
             store.LogReading(probe.Id, start.AddSeconds(100 + i), i, sequence: 100 + i);

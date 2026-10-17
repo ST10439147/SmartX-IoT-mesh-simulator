@@ -54,7 +54,7 @@ public sealed class TelemetryStore
     // every touch of one sensor's log locks that log.
     // Reference: Microsoft. SortedDictionary<TKey,TValue> Class. Microsoft Learn.
     //   https://learn.microsoft.com/dotnet/api/system.collections.generic.sorteddictionary-2
-    private readonly ConcurrentDictionary<string, SortedDictionary<DateTimeOffset, TimelinePoint>> _timelines = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, SortedDictionary<(DateTimeOffset At, long Sequence), TimelinePoint>> _timelines = new(StringComparer.OrdinalIgnoreCase);
 
     private long _packetsIngested;
     private long _lookups;
@@ -170,15 +170,15 @@ public sealed class TelemetryStore
     /// Files a reading on the sensor's timeline under the time it was taken. Arrival order
     /// does not matter: the sorted dictionary puts it where its timestamp belongs.
     /// </summary>
-    // ponytail: two readings from one sensor with the same timestamp keep only the later
-    // arrival. Key on (timestamp, sequence) if a node can ever publish twice in one tick.
+    // The key is (timestamp, sequence): sorted by time first, and the arrival sequence keeps
+    // two readings with the same timestamp from overwriting each other.
     public void LogReading(string sensorId, DateTimeOffset at, double value, long sequence)
     {
         if (!_timelines.TryGetValue(sensorId, out var log)) return;
 
         lock (log)
         {
-            log[at] = new TimelinePoint(at, value, sequence);
+            log[(at, sequence)] = new TimelinePoint(at, value, sequence);
 
             // Bounded like the ring buffers. The first key is always the oldest reading.
             if (log.Count > TimelineCapacity) log.Remove(log.Keys.First());
