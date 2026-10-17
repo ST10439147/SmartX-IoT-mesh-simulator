@@ -208,6 +208,18 @@ public sealed class GatewayClient(HttpClient http)
         }
     }
 
+    public async Task<IReadOnlyList<Insight>> GetInsightsAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            return await http.GetFromJsonAsync<List<Insight>>("api/predictions/insights", SmartXJson.Options, ct) ?? [];
+        }
+        catch (HttpRequestException)
+        {
+            return [];
+        }
+    }
+
     // ---- timeline ----------------------------------------------------------
 
     /// <summary>One sensor's readings in timestamp order, oldest first. Null if the gateway could not be reached or the sensor is gone.</summary>

@@ -35,7 +35,8 @@ builder.Services.AddSingleton<AnomalyEngine>();
 builder.Services.AddSingleton<AttachmentService>();
 builder.Services.AddSingleton<IngestQueue>();
 builder.Services.AddSingleton<CommandService>();
-builder.Services.AddSingleton<PredictionService>();
+builder.Services.AddSingleton(services => new PredictionService(
+    services.GetRequiredService<TelemetryStore>(), services.GetRequiredService<AnomalyEngine>(), "storage/predictions.json"));
 // Reference [23]: Microsoft. Background tasks with hosted services in ASP.NET Core. Microsoft Learn.
 //   https://learn.microsoft.com/aspnet/core/fundamentals/host/hosted-services
 builder.Services.AddHostedService<IngestWorker>();
@@ -308,6 +309,9 @@ api.MapGet("/predictions/pairs", (PredictionService predictions) => predictions.
 // HubEvents.SuggestionReady the moment their alert is raised.
 api.MapGet("/predictions/suggestion", (PredictionService predictions) =>
     predictions.Current is { } suggestion ? Results.Ok(suggestion) : Results.NoContent());
+
+// Every learned event with its ranked follow-ups, open faults first; seeded on first run and kept across restarts.
+api.MapGet("/predictions/insights", (PredictionService predictions) => predictions.Insights());
 
 // Devices under their threshold but projected to cross it within the trend horizon, soonest first.
 api.MapGet("/predictions/trends", (PredictionService predictions) => predictions.TrendFlags());

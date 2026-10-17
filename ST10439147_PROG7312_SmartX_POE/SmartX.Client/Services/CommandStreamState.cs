@@ -27,6 +27,7 @@ public sealed class CommandStreamState(GatewayClient gateway) : IAsyncDisposable
     public QueueStatus? Queue { get; private set; }
     public Suggestion? Suggestion { get; private set; }
     public IReadOnlyList<TrendFlag> Trends { get; private set; } = [];
+    public IReadOnlyList<Insight> Insights { get; private set; } = [];
     public IReadOnlyList<TimelinePoint> Timeline { get; private set; } = [];
 
     // Operator choices; they persist because this object does.
@@ -108,6 +109,7 @@ public sealed class CommandStreamState(GatewayClient gateway) : IAsyncDisposable
         Queue = await gateway.GetQueueAsync() ?? Queue;
         Commands = await gateway.GetCommandsAsync() ?? Commands;
         Trends = await gateway.GetTrendsAsync();
+        Insights = await gateway.GetInsightsAsync();
         Suggestion ??= await gateway.GetSuggestionAsync();
 
         if (!Snapshots.Any(s => s.Id == TimelineSensor))

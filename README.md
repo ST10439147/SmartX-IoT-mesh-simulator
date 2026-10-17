@@ -145,6 +145,7 @@ are the Part 2 checks:
 | `SortedDictionary` | `sorted dictionary:` | packets sent 3,1,4,2 read back 1,2,3,4 |
 | `HashSet<T>` | `hash set:` | one outage raises one alert, repeat sweeps are skipped |
 | Suggestion ranking | `dictionary of counters:` and `suggestion:` | the most-repeated follow-up ranks first and is suggested |
+| Persistence and insights | `persistence:` | first run is seeded with typical habits, counters survive a restart (`storage/predictions.json`), open faults are flagged in "Automated insights" |
 
 **2. Simulate a high-priority alert (about 2 minutes).**
 

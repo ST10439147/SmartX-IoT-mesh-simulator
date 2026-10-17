@@ -47,6 +47,9 @@ internal static class SelfCheckRunner
             foreach (var line in RunPredictionLogChecks())
                 Console.WriteLine($"  ok  {line}");
 
+            foreach (var line in RunPersistenceChecks())
+                Console.WriteLine($"  ok  {line}");
+
             foreach (var line in RunTrendChecks())
                 Console.WriteLine($"  ok  {line}");
         }
@@ -450,6 +453,46 @@ internal static class SelfCheckRunner
         log.Add("prediction log: every search and command is logged with the alert that was open at the time");
         log.Add("dictionary of counters: after-X-did-Y pairs are counted and the most frequent follow-up ranks first");
         log.Add("suggestion: when a moisture alert recurs, the pump the operator keeps searching for is suggested");
+        return log;
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    private static IEnumerable<string> RunPersistenceChecks()
+    {
+        var log = new List<string>();
+        var path = Path.Combine(Path.GetTempPath(), $"smartx-predictions-{Guid.NewGuid():N}.json");
+
+        try
+        {
+            var store = new TelemetryStore();
+            var engine = new AnomalyEngine(store, new CommandService(), NullLogger<AnomalyEngine>.Instance);
+
+            var first = new PredictionService(store, engine, path);
+            var seeded = first.Insights();
+            Assert(seeded.Count >= 3 && seeded.All(i => !i.Open), "a first run starts from seeded habits, none of them open");
+            Assert(seeded.SelectMany(i => i.FollowUps).All(f => f.Count >= PredictionService.MinOccurrences), "insights list only follow-ups that are a habit");
+
+            // Learn one more, as a fault would: write straight through the counters by recording under a fault.
+            var probe = store.Register(new SensorRegistration
+            {
+                MacAddress = "A4:CF:12:9B:08:01", DisplayName = "Persist probe", DeploymentPath = "Facility A/Zone 1/Sub-Zone A",
+                Category = SensorCategory.SoilMoisture, PublishIntervalSeconds = 2
+            });
+            var heard = DateTimeOffset.UtcNow;
+            store.Ingest(new TelemetryPacket<float>(probe.Id, 31f, probe.Category, heard));
+            engine.SweepForSilence(heard.AddSeconds(8));
+            first.Record(OperatorActionKind.Search, "valve");
+            Assert(first.Insights().Any(i => i.Open && i.Devices.Contains("Persist probe")), "a learned event with a fault open now is flagged open, naming the device");
+
+            var second = new PredictionService(store, engine, path);
+            Assert(second.Rank("SoilMoisture|Silence").Any(f => f.FollowUp == "Search:valve" && f.Count == 3), "a restart reloads what was learned (seed 2 + 1 new)");
+            Assert(second.Insights().Count == first.Insights().Count, "a restart does not re-seed over saved counters");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+
+        log.Add("persistence: first run is seeded, counters survive a restart, open faults are flagged in the insights");
         return log;
     }
     //----------------------------------------------------------------------------------------------------------------------//
