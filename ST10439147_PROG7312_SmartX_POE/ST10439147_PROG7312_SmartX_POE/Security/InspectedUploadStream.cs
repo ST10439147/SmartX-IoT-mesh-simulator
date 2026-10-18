@@ -19,6 +19,8 @@ namespace SmartX.Api.Security;
 /// </summary>
 public sealed class InspectedUploadStream(ReadOnlyMemory<byte> head, Stream inner, long maxBytes) : Stream
 {
+    // Reference [42]: Microsoft. IncrementalHash Class. Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/api/system.security.cryptography.incrementalhash
     private readonly IncrementalHash _hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
     private int _headOffset;
     private byte[]? _digest;

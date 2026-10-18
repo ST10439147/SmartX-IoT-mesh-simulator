@@ -2,9 +2,11 @@ name: CI/CD
 
 on:
   push:
-    branches: [main, Service, feat-frontend]
+    branches:
+      - '**' # Runs on pushes to all branches
   pull_request:
-    branches: [main, Service]
+    branches:
+      - '**' # Runs on pull requests targeting any branch
 
 env:
   DOTNET_VERSION: "10.0.x"

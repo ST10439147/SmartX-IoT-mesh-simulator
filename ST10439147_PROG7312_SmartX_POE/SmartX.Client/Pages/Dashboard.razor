@@ -45,6 +45,85 @@
     </div>
 }
 
+@* ------------------------------------------------------------ operator search *@
+<section class="panel" style="margin-bottom:1rem">
+    <div class="panel-head">
+        <h2>Search</h2>
+        <span class="count">name, id, deployment path or category</span>
+    </div>
+
+    @* Pushed the moment a familiar alert comes round again, before anything is typed. *@
+    @if (LiveSuggestion is { } suggestion)
+    {
+        <div class="suggestion">
+            <p class="hint">
+                <span class="tag info">suggested next</span>
+                @Describe(suggestion.Context) on @suggestion.SensorName. After this alert you have usually:
+            </p>
+            <div class="actions">
+                @foreach (var followUp in suggestion.FollowUps)
+                {
+                    var (kind, target) = Split(followUp.FollowUp);
+                    if (kind == "Search")
+                    {
+                        <button @onclick="() => RunSuggestionAsync(target)">Search "@target" <span class="tag ok">&times;@followUp.Count</span></button>
+                    }
+                    else
+                    {
+                        <span class="tag" title="Issue it from Manual override">@target &times;@followUp.Count</span>
+                    }
+                }
+                <button class="ghost" @onclick="() => _suggestion = null">Dismiss</button>
+            </div>
+        </div>
+    }
+
+    @if (_trends.Count > 0)
+    {
+        <div class="suggestion">
+            <p class="hint"><span class="tag warn">trending</span> Still under threshold, but climbing toward it:</p>
+            <div class="actions">
+                @foreach (var trend in _trends)
+                {
+                    <button class="ghost" @onclick="() => OpenTrend(trend)">
+                        @trend.SensorName: @trend.Current.ToString("0.##") &rarr; @trend.Threshold.ToString("0.##")@trend.Unit
+                        in ~@Math.Ceiling(trend.SecondsToThreshold)s
+                    </button>
+                }
+            </div>
+        </div>
+    }
+
+    <form class="form-grid" @onsubmit="SearchAsync">
+        <div class="field">
+            <label for="search-term">Find a device</label>
+            <input id="search-term" type="search" @bind="_searchTerm" placeholder="pump" />
+        </div>
+    </form>
+
+    <div class="actions">
+        <button @onclick="SearchAsync" disabled="@string.IsNullOrWhiteSpace(_searchTerm)">Search</button>
+    </div>
+
+    @if (_searchResults is { Count: > 0 })
+    {
+        <div class="sensor-grid" style="margin-top:.8rem">
+            @foreach (var sensor in _searchResults)
+            {
+                <button class="tile @TileClass(sensor)" @onclick="() => SelectSensor(sensor)">
+                    <div class="name">@sensor.DisplayName</div>
+                    <div class="path">@sensor.DeploymentPath</div>
+                    <div class="reading">@Reading(sensor)<span class="unit">@sensor.Unit</span></div>
+                </button>
+            }
+        </div>
+    }
+    else if (_searchResults is not null)
+    {
+        <p class="hint" style="margin-top:.5rem">No device matches "@_searchedFor".</p>
+    }
+</section>
+
 <div class="dash">
 
     @* ------------------------------------------------------------ severity-ranked rail *@
@@ -229,6 +308,365 @@
     </section>
 }
 
+@* ------------------------------------------------------------ device registry *@
+<section class="panel inspector">
+    <div class="panel-head">
+        <h2>Device registry</h2>
+        <span class="count">Dictionary&lt;MAC, device&gt; &middot; one hash lookup per packet</span>
+    </div>
+
+    <p>
+        Every packet names the node that sent it, and the gateway finds that node in a dictionary
+        keyed by MAC address. The lookup costs the same whether the mesh has twelve nodes or twelve
+        thousand. Type a MAC in any spelling to look a device up the same way a packet does.
+    </p>
+
+    @if (_registry is not null)
+    {
+        <div class="stats">
+            <div class="stat">
+                <div class="label">Devices</div>
+                <div class="value">@_registry.Devices</div>
+            </div>
+            <div class="stat">
+                <div class="label">Lookups</div>
+                <div class="value">@_registry.Lookups.ToString("N0")</div>
+            </div>
+            <div class="stat">
+                <div class="label">Misses</div>
+                <div class="value @(_registry.Misses > 0 ? "warn" : "ok")">@_registry.Misses.ToString("N0")</div>
+            </div>
+        </div>
+    }
+
+    <div class="form-grid" style="margin-top:.8rem">
+        <div class="field">
+            <label for="registry-key">MAC address or id</label>
+            <input id="registry-key" @bind="_registryKey" placeholder="a4-cf-12-9b-04-7e" />
+        </div>
+    </div>
+
+    <div class="actions">
+        <button @onclick="LookupAsync" disabled="@string.IsNullOrWhiteSpace(_registryKey)">Look up</button>
+    </div>
+
+    @if (_registryHit is not null)
+    {
+        <p class="hint" style="margin-top:.5rem">
+            Found <code>@_registryHit.Id</code>: @_registryHit.DisplayName, @_registryHit.DeploymentPath.
+        </p>
+    }
+    else if (_registryMissed)
+    {
+        <p class="hint" style="margin-top:.5rem">No device is registered under that MAC. The miss has been counted.</p>
+    }
+</section>
+
+@* ------------------------------------------------------------ timeline *@
+<section class="panel inspector">
+    <div class="panel-head">
+        <h2>Sensor timeline</h2>
+        <span class="count">SortedDictionary&lt;DateTimeOffset, reading&gt; &middot; ordered by timestamp</span>
+    </div>
+
+    <p>
+        A mesh relays packets over several hops, so they do not always arrive in the order they were
+        sent. Each sensor's log is kept sorted by the time a reading was taken, so a late packet is
+        slotted into its place rather than tacked on the end. Send some out of order to see it.
+    </p>
+
+    <div class="form-grid">
+        <div class="field">
+            <label for="timeline-sensor">Sensor</label>
+            <select id="timeline-sensor" value="@_timelineSensor" @onchange="OnTimelineSensorChanged">
+                @foreach (var sensor in _snapshots)
+                {
+                    <option value="@sensor.Id">@sensor.DisplayName</option>
+                }
+            </select>
+        </div>
+    </div>
+
+    <div class="actions">
+        <button @onclick="ScrambleAsync" disabled="@(_timelineSensor.Length == 0)">Send 8 packets out of order</button>
+    </div>
+
+    <TimelineGraph Points="_timeline" Label="@($"{SensorName(_timelineSensor)} readings over time")" />
+
+    @if (_timeline.Count > 0)
+    {
+        var late = TimelineGraph.LateFlags(_timeline);
+
+        <p class="hint" style="margin-top:.6rem">
+            @late.Count(l => l) of the @_timeline.Count readings shown arrived late. They are marked
+            on the graph and highlighted below, each in its place in time.
+        </p>
+
+        <h3>Readings, newest first</h3>
+        <div class="scroll-x" style="max-height:20rem;overflow-y:auto">
+            <table class="context-table">
+                <thead>
+                    <tr><th>taken at</th><th>value</th><th>arrived</th><th></th></tr>
+                </thead>
+                <tbody>
+                    @for (var i = _timeline.Count - 1; i >= 0; i--)
+                    {
+                        <tr class="@(late[i] ? "offending" : "")">
+                            <td>@_timeline[i].At.ToLocalTime().ToString("HH:mm:ss.fff")</td>
+                            <td>@_timeline[i].Value.ToString("0.##")</td>
+                            <td>#@_timeline[i].Sequence</td>
+                            <td>@(late[i] ? "late" : "")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</section>
+
+@* ------------------------------------------------------------ disconnect set *@
+<section class="panel inspector">
+    <div class="panel-head">
+        <h2>Disconnect set</h2>
+        <span class="count">HashSet&lt;string&gt; &middot; Add returns false for a duplicate</span>
+    </div>
+
+    <p>
+        A node that stays silent fails the silence check every few seconds, and each failure would
+        be another alert. The gateway keeps the silent nodes in a hash set: a node is added when it
+        is first found silent, and a repeat finding is recognised as a duplicate and skipped. Open
+        spikes and threshold breaches are tracked the same way. Unplug a node and watch the rail.
+    </p>
+
+    @if (_faults is not null)
+    {
+        <div class="stats">
+            <div class="stat">
+                <div class="label">Disconnected nodes</div>
+                <div class="value @(_faults.Disconnected.Count > 0 ? "warn" : "ok")">@_faults.Disconnected.Count</div>
+            </div>
+            <div class="stat">
+                <div class="label">Open error states</div>
+                <div class="value @(_faults.ActiveErrors.Count > 0 ? "warn" : "ok")">@_faults.ActiveErrors.Count</div>
+            </div>
+            <div class="stat">
+                <div class="label">Duplicate alerts skipped</div>
+                <div class="value">@_faults.DuplicatesSkipped.ToString("N0")</div>
+            </div>
+        </div>
+    }
+
+    <div class="form-grid" style="margin-top:.8rem">
+        <div class="field">
+            <label for="unplug-sensor">Node</label>
+            <select id="unplug-sensor" value="@_unplugSensor" @onchange="e => _unplugSensor = e.Value?.ToString() ?? string.Empty">
+                @foreach (var sensor in _snapshots)
+                {
+                    <option value="@sensor.Id">@sensor.DisplayName</option>
+                }
+            </select>
+        </div>
+    </div>
+
+    <div class="actions">
+        <button class="danger" @onclick="() => UnplugAsync(60)" disabled="@(_unplugSensor.Length == 0)">Unplug for 60 s</button>
+        <button @onclick="() => UnplugAsync(0)" disabled="@(_unplugSensor.Length == 0)">Plug back in</button>
+    </div>
+    <p class="hint" style="margin-top:.4rem">
+        The node is found silent after three missed publish intervals, checked every five seconds.
+    </p>
+
+    @if (_faults is not null)
+    {
+        <div class="split">
+            <div>
+                <h3>In the disconnect set</h3>
+                @if (_faults.Disconnected.Count == 0)
+                {
+                    <p class="hint">Empty. Every node is reporting.</p>
+                }
+                else
+                {
+                    <ul class="list">
+                        @foreach (var id in _faults.Disconnected)
+                        {
+                            <li>
+                                <span class="tag warn">Silence</span>
+                                <span class="grow">@SensorName(id)</span>
+                                <span class="meta">@_active.Concat(_suppressed).Count(a => a.SensorId == id && a.Kind == AlertKind.Silence) alert(s)</span>
+                            </li>
+                        }
+                    </ul>
+                }
+            </div>
+
+            <div>
+                <h3>Open error states</h3>
+                @if (_faults.ActiveErrors.Count == 0)
+                {
+                    <p class="hint">Empty. No spike or threshold breach is in progress.</p>
+                }
+                else
+                {
+                    <ul class="list">
+                        @foreach (var key in _faults.ActiveErrors)
+                        {
+                            var parts = key.Split('|');
+
+                            <li>
+                                <span class="tag warn">@parts[^1]</span>
+                                <span class="grow">@SensorName(parts[0])</span>
+                            </li>
+                        }
+                    </ul>
+                }
+            </div>
+        </div>
+    }
+</section>
+
+@* ------------------------------------------------------------ manual override commands *@
+<section class="panel inspector">
+    <div class="panel-head">
+        <h2>Manual override</h2>
+        <span class="count">Stack&lt;T&gt; command history &middot; undo is last in, first out</span>
+    </div>
+
+    <p>
+        A command pins an actuator on or off until it is undone. Every command is pushed onto a
+        stack, and Undo pops the most recent one and puts each device back as it was.
+    </p>
+
+    <div class="split">
+        <div>
+            <h3>Actuators</h3>
+            @if (_actuators.Count == 0)
+            {
+                <p class="hint">No valves, vents or pumps registered.</p>
+            }
+            else
+            {
+                <ul class="list">
+                    @foreach (var device in _actuators)
+                    {
+                        <li>
+                            <span class="tag @(IsOn(device) ? "ok" : "")">@StateLabel(device)</span>
+                            <span class="grow">@device.DisplayName</span>
+                            <span class="meta">@OverrideLabel(device.Id)</span>
+                            <button class="tiny" @onclick="() => CommandAsync(device, true)">On</button>
+                            <button class="tiny" @onclick="() => CommandAsync(device, false)">Off</button>
+                        </li>
+                    }
+                </ul>
+            }
+
+            <div class="actions">
+                <button class="danger" @onclick="ShutAllValvesAsync"
+                        disabled="@(!_actuators.Any(a => a.Category == SensorCategory.IrrigationValve))">
+                    Shut all valves
+                </button>
+                <button @onclick="UndoAsync" disabled="@(_commands is not { History.Count: > 0 })">Undo last command</button>
+            </div>
+            <p class="hint" style="margin-top:.4rem">A device acts on a command the next time it publishes, so allow a few seconds.</p>
+        </div>
+
+        <div>
+            <h3>Command history, newest first</h3>
+            @if (_commands is not { History.Count: > 0 })
+            {
+                <p class="hint">No commands issued. Nothing to undo.</p>
+            }
+            else
+            {
+                <ul class="list">
+                    @foreach (var command in _commands.History)
+                    {
+                        <li>
+                            <span class="tag @(command == _commands.History[0] ? "warn" : "")">
+                                @(command == _commands.History[0] ? "next undo" : $"#{command.Id}")
+                            </span>
+                            <span class="grow">@command.Label</span>
+                            <span class="meta">@command.Changes.Count device(s) &middot; @Ago(command.IssuedAt)</span>
+                        </li>
+                    }
+                </ul>
+            }
+        </div>
+    </div>
+</section>
+
+@* ------------------------------------------------------------ ingest queue *@
+<section class="panel inspector">
+    <div class="panel-head">
+        <h2>Ingest queue</h2>
+        <span class="count">FIFO Queue&lt;T&gt; &middot; criticals via PriorityQueue</span>
+    </div>
+
+    <p>
+        Every packet waits here before the background worker ingests it. Normal packets leave in
+        arrival order; a spike or threshold breach goes into a priority lane that the worker always
+        empties first. Flood the queue, then send a critical packet, to watch it overtake the backlog.
+    </p>
+
+    <div class="actions">
+        <button @onclick="FloodAsync">Flood the queue</button>
+        <button class="danger" @onclick="SendCriticalAsync" disabled="@(CriticalTarget is null)">Send critical packet</button>
+    </div>
+
+    @if (_queue is not null)
+    {
+        <div class="stats" style="margin-top:.8rem">
+            <div class="stat">
+                <div class="label">Waiting (normal)</div>
+                <div class="value @(_queue.Depth > 0 ? "warn" : "ok")">@_queue.Depth</div>
+            </div>
+            <div class="stat">
+                <div class="label">Waiting (critical)</div>
+                <div class="value @(_queue.CriticalDepth > 0 ? "crit" : "ok")">@_queue.CriticalDepth</div>
+            </div>
+            <div class="stat">
+                <div class="label">Processed</div>
+                <div class="value">@_queue.Processed.ToString("N0")</div>
+            </div>
+            <div class="stat">
+                <div class="label">Worker delay</div>
+                <div class="value">@_queue.ThrottleMs.ToString("0") ms</div>
+            </div>
+        </div>
+
+        @if (_lastCritical is { } jumped)
+        {
+            <p class="hint" style="margin-top:.6rem">
+                Last critical packet (@jumped.Critical on @SensorName(jumped.SensorId)) arrived
+                <code>#@jumped.Sequence</code> and was processed <code>#@jumped.Position</code>,
+                ahead of @_overtaken older normal packet(s).
+            </p>
+        }
+
+        <h3>Processing order, newest first</h3>
+        <div class="scroll-x" style="max-height:20rem;overflow-y:auto">
+            <table class="context-table">
+                <thead>
+                    <tr><th>processed</th><th>arrived</th><th>lane</th><th>sensor</th><th>value</th><th>waited</th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var entry in _queue.Recent.AsEnumerable().Reverse())
+                    {
+                        <tr class="@(entry.Critical is null ? "" : "offending")">
+                            <td>#@entry.Position</td>
+                            <td>#@entry.Sequence</td>
+                            <td>@(entry.Critical?.ToString() ?? "normal")</td>
+                            <td>@SensorName(entry.SensorId)</td>
+                            <td>@entry.Value.ToString("0.##")</td>
+                            <td>@entry.WaitedMs.ToString("0") ms</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</section>
+
 @* ------------------------------------------------------------ operator overloading *@
 <section class="panel inspector">
     <div class="panel-head">
@@ -317,6 +755,36 @@
     private string _aggregateB = string.Empty;
     private AggregateResult? _aggregate;
 
+    private CommandLog? _commands;
+    private List<SensorSnapshot> _actuators = [];
+
+    private string _searchTerm = string.Empty;
+    private string _searchedFor = string.Empty;
+    private IReadOnlyList<SensorSnapshot>? _searchResults;   // null until the first search
+
+    private Suggestion? _suggestion;
+    private IReadOnlyList<TrendFlag> _trends = [];
+
+    // Same window the gateway uses for "this alert is why the operator is acting": past it,
+    // the suggestion is stale. The once-a-second tick re-renders, so it drops off on its own.
+    private Suggestion? LiveSuggestion
+        => _suggestion is { } s && DateTimeOffset.UtcNow - s.RaisedAt < TimeSpan.FromMinutes(2) ? s : null;
+
+    private RegistryStatus? _registry;
+    private string _registryKey = string.Empty;
+    private SensorSnapshot? _registryHit;
+    private bool _registryMissed;
+
+    private string _timelineSensor = string.Empty;
+    private IReadOnlyList<TimelinePoint> _timeline = [];
+
+    private FaultState? _faults;
+    private string _unplugSensor = string.Empty;
+
+    private QueueStatus? _queue;
+    private QueueEntry? _lastCritical;
+    private int _overtaken;   // packets that arrived before _lastCritical but were processed after it
+
     // Reference [22]: Microsoft. Introduction to ASP.NET Core SignalR. Microsoft Learn.
     //   https://learn.microsoft.com/aspnet/core/signalr/introduction
     protected override async Task OnInitializedAsync()
@@ -325,10 +793,18 @@
         _snapshots = await Gateway.GetSensorsAsync();
         RefreshMeters();
         SortAlerts(await Gateway.GetAlertsAsync());
+        await RefreshQueueAsync();
+        await RefreshCommandsAsync();
+        await RefreshRegistryAsync();
+        await RefreshTimelineAsync();
+        await RefreshFaultsAsync();
+        _suggestion = await Gateway.GetSuggestionAsync();
 
         _hub = new HubConnectionBuilder()
             .WithUrl(new Uri(Gateway.BaseAddress, "hubs/telemetry"))
             .AddJsonProtocol(options => SmartXJson.Configure(options.PayloadSerializerOptions))
+            // Reference [47]: Microsoft. ASP.NET Core SignalR .NET client - automatically reconnect. Microsoft Learn.
+            //   https://learn.microsoft.com/aspnet/core/signalr/dotnet-client#automatically-reconnect
             .WithAutomaticReconnect()
             .Build();
 
@@ -342,15 +818,33 @@
             if (_selectedSensor is not null)
                 _selectedSensor = snapshots.FirstOrDefault(s => s.Id == _selectedSensor.Id) ?? _selectedSensor;
 
+            // The queue has no push event of its own; the once-a-second tick is the cue to re-read it.
+            await RefreshQueueAsync();
+            await RefreshCommandsAsync();
+            await RefreshRegistryAsync();
+            await RefreshTimelineAsync();
+            await RefreshFaultsAsync();
+            _trends = await Gateway.GetTrendsAsync();
+
             await InvokeAsync(StateHasChanged);
         });
 
         _hub.On<Alert>(HubEvents.AlertRaised, async alert =>
         {
+            // A long outage re-sends its one alert at a higher severity: replace, never duplicate.
+            _active.RemoveAll(a => a.Id == alert.Id);
+            _suppressed.RemoveAll(a => a.Id == alert.Id);
+
             if (alert.Suppressed) _suppressed.Insert(0, alert);
             else _active.Insert(0, alert);
 
             Rank();
+            await InvokeAsync(StateHasChanged);
+        });
+
+        _hub.On<Suggestion>(HubEvents.SuggestionReady, async suggestion =>
+        {
+            _suggestion = suggestion;
             await InvokeAsync(StateHasChanged);
         });
 
@@ -404,6 +898,7 @@
     private void RefreshMeters()
     {
         _meters = _snapshots.Where(s => s.Category == SensorCategory.PumpPower).ToList();
+        _actuators = _snapshots.Where(s => s.Payload == PayloadKind.Boolean || s.Category == SensorCategory.PumpPower).OrderBy(s => s.DisplayName).ToList();
 
         if (_meters.Count >= 2)
         {
@@ -453,6 +948,156 @@
 
     private async Task AggregateAsync()
         => _aggregate = await Gateway.AggregateAsync(_aggregateA, _aggregateB);
+
+    private async Task SearchAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_searchTerm)) return;
+
+        _searchedFor = _searchTerm.Trim();
+        _searchResults = await Gateway.SearchAsync(_searchedFor);
+
+        // One hit is the device the operator wanted, so open it straight away.
+        if (_searchResults.Count == 1) await SelectSensor(_searchResults[0]);
+    }
+
+    private async Task OpenTrend(TrendFlag trend)
+    {
+        if (_snapshots.FirstOrDefault(s => s.Id == trend.SensorId) is { } sensor) await SelectSensor(sensor);
+    }
+
+    // Goes through the normal search, so taking a suggestion is logged and reinforces it.
+    private async Task RunSuggestionAsync(string term)
+    {
+        _searchTerm = term;
+        await SearchAsync();
+    }
+
+    // "Search:pump" -> ("Search", "pump").
+    private static (string Kind, string Target) Split(string followUp)
+    {
+        var colon = followUp.IndexOf(':');
+        return (followUp[..colon], followUp[(colon + 1)..]);
+    }
+
+    // "SoilMoisture|Silence" -> "Soil moisture silence".
+    private static string Describe(string context)
+    {
+        var parts = context.Split('|');
+        var category = Enum.TryParse<SensorCategory>(parts[0], out var c) ? c.Spec().Label : parts[0];
+        return $"{category} {parts[1].ToLowerInvariant()}";
+    }
+
+    private async Task RefreshRegistryAsync() => _registry = await Gateway.GetRegistryAsync() ?? _registry;
+
+    private async Task LookupAsync()
+    {
+        _registryHit = await Gateway.FindSensorAsync(_registryKey.Trim());
+        _registryMissed = _registryHit is null;
+        await RefreshRegistryAsync();
+    }
+
+    private async Task RefreshTimelineAsync()
+    {
+        // Until one is picked, or if the picked one is deleted, show a node with a level to
+        // plot (an actuator's on/off trace says little), else whatever is registered.
+        if (!_snapshots.Any(s => s.Id == _timelineSensor))
+            _timelineSensor = (_snapshots.FirstOrDefault(s => s.Payload != PayloadKind.Boolean) ?? _snapshots.FirstOrDefault())?.Id ?? string.Empty;
+        if (_timelineSensor.Length == 0) return;
+
+        _timeline = await Gateway.GetTimelineAsync(_timelineSensor) ?? _timeline;
+    }
+
+    private async Task OnTimelineSensorChanged(ChangeEventArgs args)
+    {
+        _timelineSensor = args.Value?.ToString() ?? string.Empty;
+        await RefreshTimelineAsync();
+    }
+
+    private async Task ScrambleAsync()
+    {
+        await Gateway.ScrambleTimelineAsync(_timelineSensor);
+        await RefreshTimelineAsync();
+    }
+
+    private async Task RefreshFaultsAsync()
+    {
+        _faults = await Gateway.GetFaultsAsync() ?? _faults;
+        if (!_snapshots.Any(s => s.Id == _unplugSensor)) _unplugSensor = _snapshots.FirstOrDefault()?.Id ?? string.Empty;
+    }
+
+    private async Task UnplugAsync(int seconds)
+    {
+        await Gateway.UnplugAsync(_unplugSensor, seconds);
+        await RefreshFaultsAsync();
+    }
+
+    private async Task RefreshCommandsAsync() => _commands = await Gateway.GetCommandsAsync() ?? _commands;
+
+    private async Task CommandAsync(SensorSnapshot device, bool state)
+    {
+        await Gateway.CommandDeviceAsync(device.Id, state);
+        await RefreshCommandsAsync();
+    }
+
+    private async Task ShutAllValvesAsync()
+    {
+        await Gateway.CommandCategoryAsync(SensorCategory.IrrigationValve, false);
+        await RefreshCommandsAsync();
+    }
+
+    private async Task UndoAsync()
+    {
+        await Gateway.UndoCommandAsync();
+        await RefreshCommandsAsync();
+    }
+
+    // A pump has no open/shut flag - it is on while it draws power.
+    private static bool IsOn(SensorSnapshot device)
+        => device.Category == SensorCategory.PumpPower ? device.LatestValue > 0 : device.LatestBool;
+
+    private static string StateLabel(SensorSnapshot device)
+        => device.Category == SensorCategory.PumpPower
+            ? (IsOn(device) ? "RUNNING" : "STOPPED")
+            : (IsOn(device) ? "OPEN" : "SHUT");
+
+    private string OverrideLabel(string sensorId)
+        => _commands is not null && _commands.Overrides.TryGetValue(sensorId, out var pinned)
+            ? $"pinned {(pinned ? "on" : "off")}"
+            : "auto";
+
+    private async Task RefreshQueueAsync()
+    {
+        _queue = await Gateway.GetQueueAsync() ?? _queue;
+
+        // The trail is bounded, so a critical packet scrolls out of it once the backlog
+        // behind it has drained. Remember the last one, and the most it was seen to overtake.
+        if (_queue?.Recent.LastOrDefault(e => e.Critical is not null) is not { } critical) return;
+
+        var overtaken = _queue.Recent.Count(e => e.Position > critical.Position && e.Sequence < critical.Sequence);
+        _overtaken = critical.Sequence == _lastCritical?.Sequence ? Math.Max(_overtaken, overtaken) : overtaken;
+        _lastCritical = critical;
+    }
+
+    private async Task FloodAsync()
+    {
+        await Gateway.FloodQueueAsync();
+        await RefreshQueueAsync();
+    }
+
+    /// <summary>Any numeric node will do: the critical packet is about its value, not which sensor sent it.</summary>
+    private SensorSnapshot? CriticalTarget => _snapshots.FirstOrDefault(s => s.Payload != PayloadKind.Boolean);
+
+    private async Task SendCriticalAsync()
+    {
+        if (CriticalTarget is not { } sensor) return;
+
+        // Far outside anything the node normally reads, and a whole number so an
+        // integer sensor accepts it too.
+        await Gateway.PostTelemetryAsync(sensor.Id, Math.Round(Math.Abs(sensor.LatestValue) * 3 + 100));
+        await RefreshQueueAsync();
+    }
+
+    private string SensorName(string id) => _snapshots.FirstOrDefault(s => s.Id == id)?.DisplayName ?? id;
 
     private bool Flagged(SensorSnapshot sensor)
         => sensor.IsSilent || _active.Any(a => a.SensorId == sensor.Id && a.Severity >= AlertSeverity.Warning);

@@ -25,6 +25,7 @@ builder.Services.AddScoped(_ => new HttpClient
 });
 
 builder.Services.AddScoped<GatewayClient>();
+builder.Services.AddScoped<CommandStreamState>();   // survives page navigation: feed, filters, timeline
 
 await builder.Build().RunAsync();
 //---------------------------DDDDDDDDDDDoooooooooooooo END OF FILE DDDDDDDDDDDoooooooooooooo---------------------------//

@@ -24,6 +24,8 @@ public sealed class TelemetryBatchArchive
 {
     private readonly float[][] _cycles;
     private readonly DateTimeOffset[] _cycleStamps;
+    // Reference [39]: Microsoft. Lock Class (System.Threading). Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/api/system.threading.lock
     private readonly Lock _gate = new();
     private int _head;
     private int _count;

@@ -72,15 +72,15 @@ else
         <span class="cta">Open ingestion &rarr;</span>
     </a>
 
-    <div class="pillar locked" aria-disabled="true" title="Delivered in Part 2 of the Portfolio of Evidence">
-        <span class="step">Pillar 02 &middot; part 2</span>
+    <a class="pillar" href="commands">
+        <span class="step">Pillar 02 &middot; available</span>
         <h3>Real-time command stream &amp; history</h3>
         <p>
-            Issue commands back down to actuators and replay the full command history against the
-            telemetry timeline. Not yet wired up.
+            One page for the live feed, valve, vent and pump overrides with undo, the ingest queue,
+            the timeline and suggested next actions.
         </p>
-        <span class="cta">Locked</span>
-    </div>
+        <span class="cta">Open command stream &rarr;</span>
+    </a>
 
     <div class="pillar locked" aria-disabled="true" title="Delivered in the final Portfolio of Evidence">
         <span class="step">Pillar 03 &middot; final poe</span>
@@ -132,6 +132,8 @@ else
         _hub = new HubConnectionBuilder()
             .WithUrl(new Uri(Gateway.BaseAddress, "hubs/telemetry"))
             .AddJsonProtocol(options => SmartXJson.Configure(options.PayloadSerializerOptions))
+            // Reference [47]: Microsoft. ASP.NET Core SignalR .NET client - automatically reconnect. Microsoft Learn.
+            //   https://learn.microsoft.com/aspnet/core/signalr/dotnet-client#automatically-reconnect
             .WithAutomaticReconnect()
             .Build();
 

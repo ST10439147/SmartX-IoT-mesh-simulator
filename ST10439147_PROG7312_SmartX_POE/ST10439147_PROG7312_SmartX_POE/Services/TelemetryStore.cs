@@ -13,6 +13,21 @@ namespace SmartX.Api.Services;
 /// quietly starts boxing again. Each payload type gets its own dictionary of typed ring
 /// buffers, and <see cref="SensorRegistration.Payload"/> says which one a node belongs
 /// to. Nothing on the ingest path ever touches <see cref="object"/>.</para>
+///
+/// <para><b>The device registry is a dictionary.</b> <c>_sensors</c> maps a node's key to
+/// its registration, and it is consulted on every packet arrival - once at the ingest
+/// door and once more when the worker lands the packet. A hash lookup is O(1) on
+/// average, so the cost of finding a device does not grow with the size of the mesh; a
+/// <c>List</c> scan would be O(n) per packet. The key is the MAC in canonical form
+/// (<see cref="KeyFor"/>), which is also the id the gateway hands back, so a node can be
+/// found by either, however the MAC was typed.</para>
+///
+/// <para><b>Each sensor's timeline is a sorted dictionary.</b> The ring buffers hold
+/// packets in the order they arrived, which is what a rolling baseline wants. A timeline
+/// wants them in the order they were <em>taken</em>, and a mesh does not deliver in that
+/// order. <c>_timelines</c> keeps a <see cref="SortedDictionary{TKey,TValue}"/> per sensor
+/// keyed by timestamp: an insert is O(log n) wherever the key falls, and reading it back
+/// is already in time order, so a late packet needs no re-sort.</para>
 /// </summary>
 // ponytail: in-memory only, wiped on restart. Swap the dictionaries for a time-series
 // store (or even SQLite) if history has to outlive the process.
@@ -24,6 +39,9 @@ public sealed class TelemetryStore
 {
     private const int WindowPerSensor = 240;   // ~8 minutes at a 2s publish interval
 
+    /// <summary>Readings kept on each sensor's timeline before the oldest is dropped.</summary>
+    public const int TimelineCapacity = 240;
+
     private readonly ConcurrentDictionary<string, SensorRegistration> _sensors = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, CircularTelemetryBuffer<float>> _floats = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, CircularTelemetryBuffer<int>> _integers = new(StringComparer.OrdinalIgnoreCase);
@@ -32,7 +50,15 @@ public sealed class TelemetryStore
     private readonly ConcurrentDictionary<string, List<AttachmentInfo>> _attachments = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DateTimeOffset> _lastSeen = new(StringComparer.OrdinalIgnoreCase);
 
+    // SortedDictionary is not thread-safe: the worker writes while requests read, so
+    // every touch of one sensor's log locks that log.
+    // Reference: Microsoft. SortedDictionary<TKey,TValue> Class. Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/api/system.collections.generic.sorteddictionary-2
+    private readonly ConcurrentDictionary<string, SortedDictionary<(DateTimeOffset At, long Sequence), TimelinePoint>> _timelines = new(StringComparer.OrdinalIgnoreCase);
+
     private long _packetsIngested;
+    private long _lookups;
+    private long _misses;
 
     public DateTimeOffset StartedAt { get; } = DateTimeOffset.UtcNow;
 
@@ -43,15 +69,38 @@ public sealed class TelemetryStore
 
     public IReadOnlyCollection<SensorRegistration> Sensors => _sensors.Values.ToList();
 
-    public bool TryGet(string id, out SensorRegistration sensor) => _sensors.TryGetValue(id, out sensor!);
+    /// <summary>
+    /// The registry key for a MAC or id: colons, upper case. <c>a4-cf-12-9b-04-7e</c> and
+    /// <c>A4:CF:12:9B:04:7E</c> are the same device and must hash to the same entry.
+    /// </summary>
+    public static string KeyFor(string macOrId) => macOrId.Trim().Replace('-', ':').ToUpperInvariant();
 
-    public bool Exists(string id) => _sensors.ContainsKey(id);
+    /// <summary>The registry lookup: one hash probe by MAC or id, counted so it can be shown.</summary>
+    // Reference: Microsoft. Dictionary<TKey,TValue> Class. Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/api/system.collections.generic.dictionary-2
+    public bool TryGet(string macOrId, out SensorRegistration sensor)
+    {
+        // Reference [44]: Microsoft. Interlocked Class. Microsoft Learn.
+        //   https://learn.microsoft.com/dotnet/api/system.threading.interlocked
+        Interlocked.Increment(ref _lookups);
+        if (_sensors.TryGetValue(KeyFor(macOrId), out sensor!)) return true;
+
+        Interlocked.Increment(ref _misses);
+        return false;
+    }
+
+    public bool Exists(string macOrId) => _sensors.ContainsKey(KeyFor(macOrId));
+
+    /// <summary>Registry lookups since boot, and how many of them found no device.</summary>
+    public long Lookups => Interlocked.Read(ref _lookups);
+
+    public long Misses => Interlocked.Read(ref _misses);
     //----------------------------------------------------------------------------------------------------------------------//
 
     /// <summary>Registers a node and allocates its typed ring buffer. Idempotent on the MAC.</summary>
     public SensorRegistration Register(SensorRegistration sensor)
     {
-        sensor.Id = sensor.MacAddress.Replace('-', ':').ToUpperInvariant();
+        sensor.Id = KeyFor(sensor.MacAddress);
         sensor.RegisteredAt = DateTimeOffset.UtcNow;
         _sensors[sensor.Id] = sensor;
 
@@ -70,17 +119,20 @@ public sealed class TelemetryStore
         }
 
         _attachments.TryAdd(sensor.Id, []);
+        _timelines.TryAdd(sensor.Id, []);
         return sensor;
     }
     //----------------------------------------------------------------------------------------------------------------------//
     public bool Remove(string id)
     {
+        id = KeyFor(id);
         _floats.TryRemove(id, out _);
         _integers.TryRemove(id, out _);
         _booleans.TryRemove(id, out _);
         _archives.TryRemove(id, out _);
         _attachments.TryRemove(id, out _);
         _lastSeen.TryRemove(id, out _);
+        _timelines.TryRemove(id, out _);
         return _sensors.TryRemove(id, out _);
     }
 
@@ -114,9 +166,30 @@ public sealed class TelemetryStore
         if (_archives.TryGetValue(sensorId, out var archive)) archive.StageCycle(readings, at);
     }
     //----------------------------------------------------------------------------------------------------------------------//
+    /// <summary>
+    /// Files a reading on the sensor's timeline under the time it was taken. Arrival order
+    /// does not matter: the sorted dictionary puts it where its timestamp belongs.
+    /// </summary>
+    // The key is (timestamp, sequence): sorted by time first, and the arrival sequence keeps
+    // two readings with the same timestamp from overwriting each other.
+    public void LogReading(string sensorId, DateTimeOffset at, double value, long sequence)
+    {
+        if (!_timelines.TryGetValue(sensorId, out var log)) return;
+
+        lock (log)
+        {
+            log[(at, sequence)] = new TimelinePoint(at, value, sequence);
+
+            // Bounded like the ring buffers. The first key is always the oldest reading.
+            if (log.Count > TimelineCapacity) log.Remove(log.Keys.First());
+        }
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
     private void Touch(string sensorId, DateTimeOffset at)
     {
-        _lastSeen[sensorId] = at;
+        // A packet that arrives late carries an old timestamp; it must not wind the
+        // node's last-seen time backwards.
+        _lastSeen.AddOrUpdate(sensorId, at, (_, seen) => at > seen ? at : seen);
         Interlocked.Increment(ref _packetsIngested);
     }
 
@@ -136,6 +209,13 @@ public sealed class TelemetryStore
 
     public TelemetryBatchArchive? Archive(string sensorId)
         => _archives.GetValueOrDefault(sensorId);
+
+    /// <summary>The newest <paramref name="samples"/> readings, oldest first, in timestamp order.</summary>
+    public IReadOnlyList<TimelinePoint> Timeline(string sensorId, int samples)
+    {
+        if (!_timelines.TryGetValue(sensorId, out var log)) return [];
+        lock (log) return log.Values.Skip(Math.Max(0, log.Count - Math.Max(1, samples))).ToList();
+    }
     //----------------------------------------------------------------------------------------------------------------------//
 
     /// <summary>Latest value as a double for display purposes only; the stored packet keeps its real type.</summary>

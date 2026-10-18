@@ -1,0 +1,282 @@
+@page "/commands"
+@implements IDisposable
+@inject CommandStreamState Stream
+
+<PageTitle>Command stream - Smart-X Gateway</PageTitle>
+
+<div class="page-head">
+    <h1>Command stream</h1>
+    <p>
+        One view of the live feed, the manual overrides and their undo history, the ingest queue and
+        what the gateway suggests you do next. Your filters and the feed stay put when you leave and come back.
+    </p>
+</div>
+
+<div class="stats" style="margin-bottom:1rem">
+    <div class="stat">
+        <div class="label">Connection</div>
+        <div class="value @(Stream.Connected ? "ok" : "crit")" style="font-size:1rem">@(Stream.Connected ? "live" : "offline")</div>
+    </div>
+    <div class="stat">
+        <div class="label">Queue depth</div>
+        <div class="value @(Depth > 0 ? "warn" : "ok")">@Depth</div>
+    </div>
+    <div class="stat">
+        <div class="label">Open alerts</div>
+        <div class="value @(Stream.Status?.ActiveAlerts > 0 ? "crit" : "ok")">@(Stream.Status?.ActiveAlerts ?? 0)</div>
+    </div>
+    <div class="stat">
+        <div class="label">Commands to undo</div>
+        <div class="value">@(Stream.Commands?.History.Count ?? 0)</div>
+    </div>
+</div>
+
+@* ------------------------------------------------------------ live feed *@
+<section class="panel" style="margin-bottom:1rem">
+    <div class="panel-head">
+        <h2>Live feed</h2>
+        <span class="count">@Visible.Count of @Stream.Snapshots.Count nodes</span>
+    </div>
+
+    <div class="form-grid">
+        <div class="field">
+            <label for="cs-search">Search</label>
+            <input id="cs-search" type="search" placeholder="name, id, path" @bind="Stream.SearchText" @bind:event="oninput" />
+        </div>
+        <div class="field">
+            <label for="cs-cat">Category</label>
+            <select id="cs-cat" value="@(Stream.Category?.ToString() ?? "")" @onchange="e => Stream.Category = Enum.TryParse<SensorCategory>(e.Value?.ToString(), out var c) ? c : null">
+                <option value="">All categories</option>
+                @foreach (var category in Enum.GetValues<SensorCategory>())
+                {
+                    <option value="@category">@category.Spec().Label</option>
+                }
+            </select>
+        </div>
+        <div class="field">
+            <label for="cs-state">Alert state</label>
+            <select id="cs-state" value="@Stream.AlertState" @onchange="e => Stream.AlertState = Enum.Parse<AlertFilter>(e.Value!.ToString()!)">
+                <option value="@AlertFilter.Any">Any</option>
+                <option value="@AlertFilter.Alerting">Alerting</option>
+                <option value="@AlertFilter.Silent">Silent</option>
+                <option value="@AlertFilter.Normal">Normal</option>
+            </select>
+        </div>
+    </div>
+
+    @if (Visible.Count == 0)
+    {
+        <p class="hint" style="margin-top:.8rem">No node matches these filters.</p>
+    }
+    else
+    {
+        <div class="sensor-grid" style="margin-top:.8rem">
+            @foreach (var sensor in Visible)
+            {
+                var alerting = Stream.HasOpenAlert(sensor.Id);
+                <div class="tile @(alerting && !sensor.IsSilent ? "flagged" : "") @(sensor.IsSilent ? "silent" : "")">
+                    <div class="name">@sensor.DisplayName</div>
+                    <div class="path">@sensor.DeploymentPath</div>
+                    <div class="reading">@Reading(sensor)<span class="unit">@sensor.Unit</span></div>
+                    <Sparkline Values="sensor.Spark"
+                               Stroke="@(alerting || sensor.IsSilent ? "var(--crit)" : "var(--normal)")"
+                               Label="@($"{sensor.DisplayName} recent readings")" />
+                </div>
+            }
+        </div>
+    }
+</section>
+
+<div class="split">
+    @* ------------------------------------------------------------ commands + undo *@
+    <section class="panel">
+        <div class="panel-head">
+            <h2>Commands</h2>
+            <span class="count">undo is last in, first out</span>
+        </div>
+
+        @if (Actuators.Count == 0)
+        {
+            <p class="hint">No valves, vents or pumps registered.</p>
+        }
+        else
+        {
+            <ul class="list">
+                @foreach (var device in Actuators)
+                {
+                    <li>
+                        <span class="tag @(IsOn(device) ? "ok" : "")">@StateLabel(device)</span>
+                        <span class="grow">@device.DisplayName</span>
+                        <span class="meta">@OverrideLabel(device.Id)</span>
+                        <button class="tiny" @onclick="() => Stream.CommandAsync(device.Id, true)">On</button>
+                        <button class="tiny" @onclick="() => Stream.CommandAsync(device.Id, false)">Off</button>
+                    </li>
+                }
+            </ul>
+        }
+
+        <div class="actions">
+            <button class="danger" @onclick="Stream.ShutAllValvesAsync"
+                    disabled="@(!Actuators.Any(a => a.Category == SensorCategory.IrrigationValve))">Shut all valves</button>
+            <button @onclick="Stream.UndoAsync" disabled="@(Stream.Commands is not { History.Count: > 0 })">Undo last command</button>
+        </div>
+
+        <h3>History, newest first</h3>
+        @if (Stream.Commands is not { History.Count: > 0 })
+        {
+            <p class="hint">No commands issued. Nothing to undo.</p>
+        }
+        else
+        {
+            <ul class="list">
+                @foreach (var command in Stream.Commands.History)
+                {
+                    <li>
+                        <span class="tag @(command == Stream.Commands.History[0] ? "warn" : "")">
+                            @(command == Stream.Commands.History[0] ? "next undo" : $"#{command.Id}")
+                        </span>
+                        <span class="grow">@command.Label</span>
+                        <span class="meta">@command.Changes.Count device(s)</span>
+                    </li>
+                }
+            </ul>
+        }
+    </section>
+
+    @* ------------------------------------------------------------ suggested actions *@
+    <section class="panel">
+        <div class="panel-head">
+            <h2>Suggested actions</h2>
+            <button class="tiny" title="Forget everything learned so the engine starts from scratch" @onclick="Stream.ResetLearningAsync">Reset learning</button>
+        </div>
+
+        @if (LiveSuggestion is { } suggestion)
+        {
+            <p class="hint"><span class="tag info">after this alert</span> @suggestion.SensorName. You have usually:</p>
+            <ul class="list">
+                @foreach (var followUp in suggestion.FollowUps)
+                {
+                    <li>
+                        <span class="grow">@followUp.FollowUp.Replace(":", " ")</span>
+                        <span class="tag ok">&times;@followUp.Count</span>
+                        @if (followUp.FollowUp.StartsWith("Search:"))
+                        {
+                            <button class="tiny" @onclick="() => Stream.SearchText = followUp.FollowUp[7..]">Filter feed</button>
+                        }
+                    </li>
+                }
+            </ul>
+        }
+
+        @if (Stream.Insights.Count > 0)
+        {
+            <p class="hint"><span class="tag info">automated insights</span> Learned from your searches and commands, open faults first:</p>
+            @foreach (var insight in Stream.Insights)
+            {
+                <p class="hint">
+                    <span class="tag @(insight.Open ? "warn" : "ok")">@(insight.Open ? "open now" : "learned")</span>
+                    @insight.Label@(insight.Open ? ": " + string.Join(", ", insight.Devices) : "")
+                </p>
+                <ul class="list">
+                    @foreach (var followUp in insight.FollowUps)
+                    {
+                        <li>
+                            <span class="grow">@followUp.FollowUp.Replace(":", " ")</span>
+                            <span class="tag ok">&times;@followUp.Count</span>
+                            @if (followUp.FollowUp.StartsWith("Search:"))
+                            {
+                                <button class="tiny" @onclick="() => Stream.SearchText = followUp.FollowUp[7..]">Filter feed</button>
+                            }
+                        </li>
+                    }
+                </ul>
+            }
+        }
+
+        @if (Stream.Trends.Count > 0)
+        {
+            <p class="hint"><span class="tag warn">trending</span> Under threshold, but climbing toward it:</p>
+            <ul class="list">
+                @foreach (var trend in Stream.Trends)
+                {
+                    <li>
+                        <span class="grow">@trend.SensorName: @trend.Current.ToString("0.##") &rarr; @trend.Threshold.ToString("0.##")@trend.Unit</span>
+                        <span class="meta">~@Math.Ceiling(trend.SecondsToThreshold)s</span>
+                        <button class="tiny" @onclick="() => Stream.SearchText = trend.SensorName">Filter feed</button>
+                    </li>
+                }
+            </ul>
+        }
+
+        @if (LiveSuggestion is null && Stream.Trends.Count == 0 && Stream.Insights.Count == 0)
+        {
+            <p class="hint">Nothing to suggest. Suggestions appear when a familiar alert returns or a reading climbs toward its threshold.</p>
+        }
+    </section>
+</div>
+
+@* ------------------------------------------------------------ queue + timeline *@
+<section class="panel inspector">
+    <div class="panel-head">
+        <h2>Timeline</h2>
+        <span class="count">ingest queue: @Depth waiting, @(Stream.Queue?.Processed.ToString("N0") ?? "0") processed</span>
+    </div>
+
+    <div class="form-grid">
+        <div class="field">
+            <label for="cs-timeline">Sensor</label>
+            <select id="cs-timeline" value="@Stream.TimelineSensor" @onchange="e => Stream.SelectTimelineAsync(e.Value?.ToString() ?? string.Empty)">
+                @foreach (var sensor in Stream.Snapshots)
+                {
+                    <option value="@sensor.Id">@sensor.DisplayName</option>
+                }
+            </select>
+        </div>
+    </div>
+
+    <TimelineGraph Points="Stream.Timeline" Label="Readings over time" />
+</section>
+
+@code {
+    private int Depth => (Stream.Queue?.Depth ?? 0) + (Stream.Queue?.CriticalDepth ?? 0);
+
+    private List<SensorSnapshot> Visible => Stream.Snapshots.Where(Stream.Matches).ToList();
+
+    private List<SensorSnapshot> Actuators => Stream.Snapshots
+        .Where(s => s.Payload == PayloadKind.Boolean || s.Category == SensorCategory.PumpPower)
+        .OrderBy(s => s.DisplayName).ToList();
+
+    // Same two-minute window the dashboard uses: past it the suggestion is stale.
+    private Suggestion? LiveSuggestion
+        => Stream.Suggestion is { } s && DateTimeOffset.UtcNow - s.RaisedAt < TimeSpan.FromMinutes(2) ? s : null;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Stream.Changed += OnChanged;
+        await Stream.EnsureStartedAsync();
+    }
+
+    private void OnChanged() => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Stream.Changed -= OnChanged;
+
+    private static bool IsOn(SensorSnapshot device)
+        => device.Category == SensorCategory.PumpPower ? device.LatestValue > 0 : device.LatestBool;
+
+    private static string StateLabel(SensorSnapshot device)
+        => device.Category == SensorCategory.PumpPower
+            ? (IsOn(device) ? "RUNNING" : "STOPPED")
+            : (IsOn(device) ? "OPEN" : "SHUT");
+
+    private string OverrideLabel(string sensorId)
+        => Stream.Commands is not null && Stream.Commands.Overrides.TryGetValue(sensorId, out var pinned)
+            ? $"pinned {(pinned ? "on" : "off")}"
+            : "auto";
+
+    private static string Reading(SensorSnapshot sensor) => sensor.Payload switch
+    {
+        PayloadKind.Boolean => sensor.LatestBool ? "OPEN" : "SHUT",
+        PayloadKind.Integer => sensor.LatestValue.ToString("0"),
+        _ => sensor.LatestValue.ToString("0.0")
+    };
+}

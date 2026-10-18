@@ -365,3 +365,7 @@ FodyWeavers.xsd
 storage/
 *.sxa
 *.key
+
+DEMO_SCRIPT.md
+HOW_IT_WORKS.md
+PROG7312POE.pdf

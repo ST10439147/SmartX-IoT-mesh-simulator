@@ -1,3 +1,6 @@
+using System.Collections.Concurrent;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.SignalR;
 using SmartX.Api.Hubs;
 using SmartX.Shared;
@@ -10,16 +13,21 @@ namespace SmartX.Api.Services;
 /// each node's own interval, injecting the two faults the dashboard exists to surface:
 /// value spikes and node disconnects.
 ///
-/// <para>Replace this with a real MQTT subscriber and nothing downstream changes - the
-/// simulator writes through the same <see cref="TelemetryStore.Ingest(in TelemetryPacket{float})"/>
-/// path the HTTP ingestion endpoint uses.</para>
+/// <para>Packets leave here the way a real node's would: as a <c>POST /api/telemetry</c>
+/// to the gateway. Unplug the simulator and nothing downstream changes.</para>
 /// </summary>
 public sealed class MeshSimulator(
     TelemetryStore store,
     AnomalyEngine anomalies,
+    CommandService commands,
+    PredictionService predictions,
     IHubContext<TelemetryHub> hub,
+    IServer server,
+    IHostApplicationLifetime lifetime,
     ILogger<MeshSimulator> logger) : BackgroundService
 {
+    private readonly HttpClient _http = new();
+
     private static readonly TimeSpan Tick = TimeSpan.FromSeconds(1);
 
     // Ticks of history synthesised at boot so the dashboard opens with full sparklines
@@ -31,6 +39,29 @@ public sealed class MeshSimulator(
     private readonly Random _random = new(7312);
 
     private readonly Dictionary<string, NodeState> _state = new(StringComparer.OrdinalIgnoreCase);
+
+    // Nodes an operator has unplugged, and until when. Written from a request thread and
+    // read from the publish loop, hence concurrent.
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _unplugged = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Test trigger: the node stops publishing for <paramref name="duration"/>, as if its
+    /// power had been pulled. A zero duration plugs it straight back in.
+    /// </summary>
+    public void Unplug(string sensorId, TimeSpan duration) => _unplugged[sensorId] = DateTimeOffset.UtcNow + duration;
+
+    // Nodes whose reading is climbing, and by how much a second. Same threading as _unplugged.
+    private readonly ConcurrentDictionary<string, double> _drifting = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Test trigger: the node's reading climbs by <paramref name="perSecond"/> units a second
+    /// on top of its normal signal. Zero stops the climb and puts it back where it started.
+    /// </summary>
+    public void Drift(string sensorId, double perSecond)
+    {
+        if (perSecond == 0) _drifting.TryRemove(sensorId, out _);
+        else _drifting[sensorId] = perSecond;
+    }
     //----------------------------------------------------------------------------------------------------------------------//
 
     // Reference [22]: Microsoft. Introduction to ASP.NET Core SignalR. Microsoft Learn.
@@ -41,11 +72,26 @@ public sealed class MeshSimulator(
     {
         SeedMesh();
 
-        // ponytail: warmup reuses the live publish path, so backfilled packets are all
-        // stamped at boot time. Sparklines plot by index so that is invisible there;
-        // /history shows a compressed leading segment. Thread backdated timestamps
-        // through PublishCycle if that ever matters.
-        for (var warm = 1; warm <= WarmupTicks; warm++) PublishCycle(warm);
+        // Hosted services start before Kestrel is listening, so there is nothing to post
+        // to yet. Wait for the server, then aim at whichever port it actually bound.
+        var started = new TaskCompletionSource();
+        using var registration = lifetime.ApplicationStarted.Register(started.SetResult);
+        await started.Task.WaitAsync(stoppingToken);
+
+        // Bound addresses can be wildcards ("http://[::]:8080" in the container), which
+        // are not dialable - keep the scheme and port, swap the host for loopback. Plain
+        // http is preferred so the loop does not depend on a trusted dev certificate.
+        var bound = server.Features.Get<IServerAddressesFeature>()!.Addresses
+            .Select(BindingAddress.Parse)
+            .OrderBy(a => a.Scheme == Uri.UriSchemeHttps)
+            .First();
+        _http.BaseAddress = new Uri($"{bound.Scheme}://localhost:{bound.Port}");
+
+        // Warmup reuses the live publish path, with each tick backdated to the second it
+        // stands for, so the history reads as the last four minutes rather than one instant.
+        var bootedAt = DateTimeOffset.UtcNow;
+        for (var warm = 1; warm <= WarmupTicks; warm++)
+            await PublishCycle(warm, stoppingToken, bootedAt.AddSeconds(warm - WarmupTicks));
 
         // Drop faults the accelerated warmup happened to inject so the dashboard opens
         // on a healthy mesh; real spikes and disconnects accumulate from here.
@@ -54,6 +100,8 @@ public sealed class MeshSimulator(
 
         logger.LogInformation("Mesh simulator seeded {Count} nodes, warmed {Ticks} ticks", store.Sensors.Count, WarmupTicks);
 
+        // Reference [41]: Microsoft. PeriodicTimer Class. Microsoft Learn.
+        //   https://learn.microsoft.com/dotnet/api/system.threading.periodictimer
         using var timer = new PeriodicTimer(Tick);
         var elapsed = WarmupTicks;
 
@@ -63,12 +111,17 @@ public sealed class MeshSimulator(
 
             try
             {
-                PublishCycle(elapsed);
+                await PublishCycle(elapsed, stoppingToken);
 
                 if (elapsed % 5 == 0)
                 {
                     foreach (var alert in anomalies.SweepForSilence())
+                    {
                         await hub.Clients.All.SendAsync(HubEvents.AlertRaised, alert, stoppingToken);
+
+                        if (predictions.Suggest(alert) is { } suggestion)
+                            await hub.Clients.All.SendAsync(HubEvents.SuggestionReady, suggestion, stoppingToken);
+                    }
                 }
 
                 await hub.Clients.All.SendAsync(
@@ -103,7 +156,7 @@ public sealed class MeshSimulator(
         }
     }
     //----------------------------------------------------------------------------------------------------------------------//
-    private void PublishCycle(int elapsed)
+    private async Task PublishCycle(int elapsed, CancellationToken token, DateTimeOffset? at = null)
     {
         foreach (var sensor in store.Sensors)
         {
@@ -119,6 +172,8 @@ public sealed class MeshSimulator(
 
             if (elapsed % sensor.PublishIntervalSeconds != 0) continue;
 
+            if (_unplugged.TryGetValue(sensor.Id, out var until) && until > DateTimeOffset.UtcNow) continue;
+
             // --- disconnect injection: mute a node for a stretch so the silence timer
             // has something real to catch.
             if (node.MutedUntil > elapsed) continue;
@@ -133,12 +188,15 @@ public sealed class MeshSimulator(
             // --- spike injection
             var spiking = _random.NextDouble() < 0.012;
 
+            // --- drift: a node an operator set climbing gains its rate for every second since it last published.
+            node.Ramp = _drifting.TryGetValue(sensor.Id, out var perSecond) ? node.Ramp + perSecond * sensor.PublishIntervalSeconds : 0;
+
             switch (sensor.Payload)
             {
                 case PayloadKind.Float:
                 {
                     var value = node.NextFloat(_random, spiking);
-                    store.Ingest(new TelemetryPacket<float>(sensor.Id, value, sensor.Category));
+                    await Post(sensor.Id, value, at, token);
 
                     // A poll cycle returns however many samples the mesh delivered - the
                     // ragged rows the jagged archive exists for.
@@ -151,23 +209,37 @@ public sealed class MeshSimulator(
                 case PayloadKind.Integer:
                 {
                     var value = (int)Math.Round(node.NextFloat(_random, spiking));
-                    store.Ingest(new TelemetryPacket<int>(sensor.Id, value, sensor.Category));
+
+                    // A pump commanded off draws nothing until the override is undone;
+                    // commanded on, or left alone, it runs at its usual load.
+                    if (commands.TryGetOverride(sensor.Id, out var running) && !running) value = 0;
+                    await Post(sensor.Id, value, at, token);
                     break;
                 }
 
                 case PayloadKind.Boolean:
                 {
-                    // Actuators mostly hold state; a flip is the event worth seeing.
-                    if (_random.NextDouble() < 0.08) node.Flag = !node.Flag;
-                    store.Ingest(new TelemetryPacket<bool>(sensor.Id, node.Flag, sensor.Category));
+                    // A manual override wins: the node holds the commanded position until
+                    // it is undone. Otherwise actuators mostly hold state; a flip is the
+                    // event worth seeing.
+                    if (commands.TryGetOverride(sensor.Id, out var forced)) node.Flag = forced;
+                    else if (_random.NextDouble() < 0.08) node.Flag = !node.Flag;
+                    await Post(sensor.Id, node.Flag, at, token);
                     break;
                 }
             }
-
-            var alert = anomalies.Evaluate(sensor);
-            if (alert is not null)
-                _ = hub.Clients.All.SendAsync(HubEvents.AlertRaised, alert, CancellationToken.None);
         }
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    // The gateway evaluates anomalies as it ingests, so that no longer happens here.
+    // A null timestamp leaves the gateway to stamp the packet on arrival.
+    private async Task Post<T>(string sensorId, T value, DateTimeOffset? timestamp, CancellationToken token)
+    {
+        using var response = await _http.PostAsJsonAsync("api/telemetry", new { sensorId, value, timestamp }, token);
+
+        // A node deleted mid-cycle answers 404; that is not worth losing the rest of the tick over.
+        if (!response.IsSuccessStatusCode)
+            logger.LogWarning("Gateway rejected packet from {Sensor}: {Status}", sensorId, (int)response.StatusCode);
     }
     //----------------------------------------------------------------------------------------------------------------------//
     private void SeedMesh()
@@ -176,6 +248,7 @@ public sealed class MeshSimulator(
         Add("A4:CF:12:9B:04:7E", "Soil Moisture North", "Facility A/Zone 1/Sub-Zone A", SensorCategory.SoilMoisture, 2, 31, 2.5);
         Add("A4:CF:12:9B:04:7F", "Soil Moisture South", "Facility A/Zone 1/Sub-Zone A", SensorCategory.SoilMoisture, 2, 28, 2.5);
         Add("DC:A6:32:77:11:01", "Drip Line Valve A", "Facility A/Zone 1/Sub-Zone A", SensorCategory.IrrigationValve, 4);
+        Add("DC:A6:32:77:11:03", "Drip Line Valve B", "Facility A/Zone 1/Sub-Zone A", SensorCategory.IrrigationValve, 4);
 
         // Greenhouse
         Add("A4:CF:12:9B:05:10", "Greenhouse Humidity", "Facility A/Zone 1/Sub-Zone B", SensorCategory.RelativeHumidity, 3, 62, 4.0);
@@ -230,6 +303,7 @@ public sealed class MeshSimulator(
         public double Noise;
         public bool Flag;
         public int MutedUntil;
+        public double Ramp;   // offset built up by the drift trigger; zero when not drifting
         private double _drift;
         //----------------------------------------------------------------------------------------------------------------------//
         public float NextFloat(Random random, bool spiking)
@@ -238,7 +312,7 @@ public sealed class MeshSimulator(
             // than sitting pinned to a constant.
             _drift = Math.Clamp(_drift + (random.NextDouble() - 0.5) * Noise * 0.15, -Noise, Noise);
 
-            var value = Baseline + _drift + (random.NextDouble() - 0.5) * Noise;
+            var value = Baseline + Ramp + _drift + (random.NextDouble() - 0.5) * Noise;
             if (spiking) value += Noise * random.Next(5, 10) * (random.NextDouble() < 0.5 ? -1 : 1);
 
             return (float)value;

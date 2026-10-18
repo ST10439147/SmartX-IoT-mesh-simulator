@@ -80,6 +80,9 @@ public sealed class GatewayClient(HttpClient http)
     public async Task RestoreAsync(string sensorId, AlertKind kind, CancellationToken ct = default)
         => await http.PostAsJsonAsync("api/alerts/restore", new { sensorId, kind }, SmartXJson.Options, ct);
 
+    public async Task ResetPredictionsAsync(CancellationToken ct = default)
+        => await http.PostAsync("api/predictions/reset", null, ct);
+
     public async Task<IReadOnlyList<AttachmentInfo>> GetAttachmentsAsync(string sensorId, CancellationToken ct = default)
         => await http.GetFromJsonAsync<List<AttachmentInfo>>($"api/sensors/{sensorId}/attachments", SmartXJson.Options, ct) ?? [];
 //----------------------------------------------------------------------------------------------------------------------//
@@ -137,6 +140,176 @@ public sealed class GatewayClient(HttpClient http)
     public async Task<StressResult?> StressTopologyAsync(int depth, CancellationToken ct = default)
         => await http.GetFromJsonAsync<StressResult>($"api/topology/stress?depth={depth}", SmartXJson.Options, ct);
 
+    // ---- device registry ---------------------------------------------------
+
+    /// <summary>Registry size and lookup counters. Null if the gateway could not be reached.</summary>
+    public async Task<RegistryStatus?> GetRegistryAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            return await http.GetFromJsonAsync<RegistryStatus>("api/registry", SmartXJson.Options, ct);
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Looks one device up by MAC or id, in whatever spelling it was typed. Null when there is no such device.</summary>
+    public async Task<SensorSnapshot?> FindSensorAsync(string macOrId, CancellationToken ct = default)
+    {
+        var response = await http.GetAsync($"api/sensors/{Uri.EscapeDataString(macOrId)}", ct);
+        return response.IsSuccessStatusCode
+            ? await response.Content.ReadFromJsonAsync<SensorSnapshot>(SmartXJson.Options, ct)
+            : null;
+    }
+
+    // ---- search ------------------------------------------------------------
+
+    /// <summary>Devices whose name, id, path or category contains the term. Empty if the gateway could not be reached.</summary>
+    public async Task<IReadOnlyList<SensorSnapshot>> SearchAsync(string term, CancellationToken ct = default)
+    {
+        try
+        {
+            return await http.GetFromJsonAsync<List<SensorSnapshot>>(
+                $"api/search?q={Uri.EscapeDataString(term)}", SmartXJson.Options, ct) ?? [];
+        }
+        catch (HttpRequestException)
+        {
+            return [];
+        }
+    }
+
+    // ---- predictive action engine ------------------------------------------
+
+    /// <summary>The suggestion for the alert driving the operator right now. Null when there is none or the gateway is down.</summary>
+    public async Task<Suggestion?> GetSuggestionAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var response = await http.GetAsync("api/predictions/suggestion", ct);
+            return response.StatusCode == System.Net.HttpStatusCode.OK
+                ? await response.Content.ReadFromJsonAsync<Suggestion>(SmartXJson.Options, ct)
+                : null;
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Devices climbing toward their threshold, soonest first. Empty if the gateway could not be reached.</summary>
+    public async Task<IReadOnlyList<TrendFlag>> GetTrendsAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            return await http.GetFromJsonAsync<List<TrendFlag>>("api/predictions/trends", SmartXJson.Options, ct) ?? [];
+        }
+        catch (HttpRequestException)
+        {
+            return [];
+        }
+    }
+
+    public async Task<IReadOnlyList<Insight>> GetInsightsAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            return await http.GetFromJsonAsync<List<Insight>>("api/predictions/insights", SmartXJson.Options, ct) ?? [];
+        }
+        catch (HttpRequestException)
+        {
+            return [];
+        }
+    }
+
+    // ---- timeline ----------------------------------------------------------
+
+    /// <summary>One sensor's readings in timestamp order, oldest first. Null if the gateway could not be reached or the sensor is gone.</summary>
+    public async Task<List<TimelinePoint>?> GetTimelineAsync(string sensorId, int samples = 60, CancellationToken ct = default)
+    {
+        try
+        {
+            return await http.GetFromJsonAsync<List<TimelinePoint>>(
+                $"api/sensors/{Uri.EscapeDataString(sensorId)}/timeline?samples={samples}", SmartXJson.Options, ct);
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Test trigger: has the gateway receive a few backdated readings for this sensor in shuffled order.</summary>
+    public async Task ScrambleTimelineAsync(string sensorId, CancellationToken ct = default)
+        => await http.PostAsync($"api/sensors/{Uri.EscapeDataString(sensorId)}/timeline/scramble", null, ct);
+
+    // ---- disconnect set ----------------------------------------------------
+
+    /// <summary>The disconnected nodes and open error states. Null if the gateway could not be reached.</summary>
+    public async Task<FaultState?> GetFaultsAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            return await http.GetFromJsonAsync<FaultState>("api/faults", SmartXJson.Options, ct);
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Test trigger: the simulated node stops publishing for this long. Zero plugs it back in.</summary>
+    public async Task UnplugAsync(string sensorId, int seconds, CancellationToken ct = default)
+        => await http.PostAsync($"api/sensors/{Uri.EscapeDataString(sensorId)}/unplug?seconds={seconds}", null, ct);
+
+    // ---- manual override commands ------------------------------------------
+
+    /// <summary>Undo history (newest first) and current overrides. Null if the gateway could not be reached.</summary>
+    public async Task<CommandLog?> GetCommandsAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            return await http.GetFromJsonAsync<CommandLog>("api/commands", SmartXJson.Options, ct);
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Pins one actuator on or off.</summary>
+    public async Task<bool> CommandDeviceAsync(string sensorId, bool state, CancellationToken ct = default)
+        => (await http.PostAsJsonAsync("api/commands", new { sensorId, state }, SmartXJson.Options, ct)).IsSuccessStatusCode;
+
+    /// <summary>Pins every actuator of one kind on or off as a single, undoable command.</summary>
+    public async Task<bool> CommandCategoryAsync(SensorCategory category, bool state, CancellationToken ct = default)
+        => (await http.PostAsJsonAsync("api/commands", new { category, state }, SmartXJson.Options, ct)).IsSuccessStatusCode;
+
+    public async Task<bool> UndoCommandAsync(CancellationToken ct = default)
+        => (await http.PostAsync("api/commands/undo", null, ct)).IsSuccessStatusCode;
+
+    // ---- ingest queue ------------------------------------------------------
+
+    /// <summary>Queue depth and processing trail. Null if the gateway could not be reached - the panel just keeps its last view.</summary>
+    public async Task<QueueStatus?> GetQueueAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            return await http.GetFromJsonAsync<QueueStatus>("api/queue", SmartXJson.Options, ct);
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+    }
+
+    public async Task FloodQueueAsync(CancellationToken ct = default)
+        => await http.PostAsync("api/queue/flood", null, ct);
+
+    /// <summary>Posts one reading exactly as a node would. Used by the queue panel to send a deliberately out-of-range value.</summary>
+    public async Task<bool> PostTelemetryAsync(string sensorId, double value, CancellationToken ct = default)
+        => (await http.PostAsJsonAsync("api/telemetry", new { sensorId, value }, SmartXJson.Options, ct)).IsSuccessStatusCode;
+//----------------------------------------------------------------------------------------------------------------------//
     /// <summary>Mirrors <c>AttachmentService.MaxBytes</c> so the browser rejects an oversized file first.</summary>
     public const long MaxUploadBytes = 25 * 1024 * 1024;
 }
@@ -158,6 +331,32 @@ public sealed record AggregateResult(
     AggregateValue Delta,
     bool LeftDrawsMore,
     bool Equal);
+//----------------------------------------------------------------------------------------------------------------------//
+/// <summary>Shape of <c>GET /api/registry</c>.</summary>
+public sealed record RegistryStatus(int Devices, long Lookups, long Misses, List<string> Keys);
+//----------------------------------------------------------------------------------------------------------------------//
+/// <summary>Shape of <c>GET /api/faults</c>. Active errors are <c>sensorId|Kind</c>.</summary>
+public sealed record FaultState(List<string> Disconnected, List<string> ActiveErrors, long DuplicatesSkipped);
+//----------------------------------------------------------------------------------------------------------------------//
+/// <summary>Shape of <c>GET /api/commands</c>. History is the undo stack, top first.</summary>
+public sealed record CommandLog(List<CommandEntry> History, Dictionary<string, bool> Overrides);
+
+public sealed record CommandEntry(long Id, string Label, DateTimeOffset IssuedAt, List<CommandChange> Changes);
+
+public sealed record CommandChange(string SensorId, bool? Previous, bool Target);
+//----------------------------------------------------------------------------------------------------------------------//
+/// <summary>Shape of <c>GET /api/queue</c>. Position is processing order, Sequence is arrival order.</summary>
+public sealed record QueueStatus(int Depth, int CriticalDepth, long Processed, double ThrottleMs, List<QueueEntry> Recent);
+
+public sealed record QueueEntry(
+    long Position,
+    long Sequence,
+    string Lane,
+    AlertKind? Critical,
+    string SensorId,
+    double Value,
+    DateTimeOffset ReceivedAt,
+    double WaitedMs);
 //----------------------------------------------------------------------------------------------------------------------//
 public sealed record StressResult(
     int RequestedDepth,
