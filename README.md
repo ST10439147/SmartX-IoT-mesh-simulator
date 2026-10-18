@@ -18,7 +18,7 @@ port** - no CORS configuration, no second terminal.
 ### Part 1 video
 - https://youtu.be/FJqMu1NI1Ys 
 ### Part 2 video
-- https://youtu.be/VOoHYTm8Qqs
+- https://youtu.be/42bYpN57Wcw
 
 ## Quick start
 
