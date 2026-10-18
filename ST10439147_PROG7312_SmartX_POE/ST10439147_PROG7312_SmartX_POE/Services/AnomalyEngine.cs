@@ -59,7 +59,7 @@ public sealed class AnomalyEngine(TelemetryStore store, CommandService commands,
     // store. _disconnected holds sensor ids; _activeErrors holds "sensorId|Kind".
     // HashSet is not thread-safe and the worker, the sweep and requests all touch these,
     // so every access goes through the lock.
-    // Reference: Microsoft. HashSet<T> Class. Microsoft Learn.
+    // Reference [50]: Microsoft. HashSet<T> Class. Microsoft Learn.
     //   https://learn.microsoft.com/dotnet/api/system.collections.generic.hashset-1
     private readonly HashSet<string> _disconnected = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _activeErrors = new(StringComparer.OrdinalIgnoreCase);

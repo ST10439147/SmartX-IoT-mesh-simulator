@@ -796,53 +796,61 @@ Pillar 3 (Network Topology and Mesh Routing) and persistence are out of scope fo
 part and arrive in the final PoE.
 
 # References
-- [1] Microsoft. *Generics in C#*. Microsoft Learn. https://learn.microsoft.com/dotnet/csharp/fundamentals/types/generics
-- [2] Microsoft. *How to serialize and deserialize JSON using System.Text.Json*. Microsoft Learn. https://learn.microsoft.com/dotnet/standard/serialization/system-text-json/how-to
-- [3] Microsoft. *Generic math (System.Numerics.INumber<T>)*. Microsoft Learn. https://learn.microsoft.com/dotnet/standard/generics/math
-- [4] Microsoft. *ASP.NET Core Blazor hosting models*. Microsoft Learn. https://learn.microsoft.com/aspnet/core/blazor/hosting-models
-- [5] Microsoft. *Minimal APIs overview*. Microsoft Learn. https://learn.microsoft.com/aspnet/core/fundamentals/minimal-apis/overview
-- [6] Microsoft. *HttpClient.Timeout Property*. Microsoft Learn. https://learn.microsoft.com/dotnet/api/system.net.http.httpclient.timeout
-- [7] Microsoft. *Response compression in ASP.NET Core*. Microsoft Learn. https://learn.microsoft.com/aspnet/core/performance/response-compression
-- [8] Microsoft. *Operator overloading — predefined unary, arithmetic and comparison operators*. C# language reference, Microsoft Learn. https://learn.microsoft.com/dotnet/csharp/language-reference/operators/operator-overloading
-- [9] Microsoft. *EqualityComparer<T>.Default Property*. Microsoft Learn. https://learn.microsoft.com/dotnet/api/system.collections.generic.equalitycomparer-1.default
-- [10] Microsoft. *Structure types — readonly struct and in parameters*. C# language reference, Microsoft Learn. https://learn.microsoft.com/dotnet/csharp/language-reference/builtin-types/struct
-- [11] Microsoft. *How to define value equality for a type*. Microsoft Learn. https://learn.microsoft.com/dotnet/csharp/programming-guide/statements-expressions-operators/how-to-define-value-equality-for-a-type
-- [12] Wikipedia. *Circular buffer*. https://en.wikipedia.org/wiki/Circular_buffer
-- [13] Microsoft. *Jagged arrays (C# programming guide)*. Microsoft Learn. https://learn.microsoft.com/dotnet/csharp/programming-guide/arrays/jagged-arrays
-- [14] Microsoft. *Multidimensional arrays (C# programming guide)*. Microsoft Learn. https://learn.microsoft.com/dotnet/csharp/language-reference/builtin-types/arrays
-- [15] Microsoft. *Span<T> Struct*. Microsoft Learn. https://learn.microsoft.com/dotnet/api/system.span-1
-- [16] Microsoft. *StackOverflowException Class* (cannot be caught by a try/catch). Microsoft Learn. https://learn.microsoft.com/dotnet/api/system.stackoverflowexception
-- [17] Microsoft. *Handle errors in ASP.NET Core — problem details / ValidationProblem*. Microsoft Learn. https://learn.microsoft.com/aspnet/core/fundamentals/minimal-apis/handle-errors
-- [18] Microsoft. *ConcurrentDictionary<TKey,TValue> Class*. Microsoft Learn. https://learn.microsoft.com/dotnet/api/system.collections.concurrent.concurrentdictionary-2
-- [19] Wikipedia. *Standard score (z-score)*. https://en.wikipedia.org/wiki/Standard_score
-- [20] Wikipedia. *68–95–99.7 rule (three-sigma rule of thumb)*. https://en.wikipedia.org/wiki/68%E2%80%9395%E2%80%9399.7_rule
-- [21] Wikipedia. *Alarm fatigue*. https://en.wikipedia.org/wiki/Alarm_fatigue
-- [22] Microsoft. *Introduction to ASP.NET Core SignalR*. Microsoft Learn. https://learn.microsoft.com/aspnet/core/signalr/introduction
-- [23] Microsoft. *Background tasks with hosted services in ASP.NET Core*. Microsoft Learn. https://learn.microsoft.com/aspnet/core/fundamentals/host/hosted-services
-- [24] Microsoft. *Upload files in ASP.NET Core — uploading large files with streaming*. Microsoft Learn. https://learn.microsoft.com/aspnet/core/mvc/models/file-uploads
-- [25] Microsoft. *Configure options for the ASP.NET Core Kestrel web server — MaxRequestBodySize*. Microsoft Learn. https://learn.microsoft.com/aspnet/core/fundamentals/servers/kestrel/options
-- [26] OWASP. *File Upload Cheat Sheet*. OWASP Cheat Sheet Series. https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
-- [27] OWASP. *Path Traversal*. https://owasp.org/www-community/attacks/Path_Traversal
-- [28] Microsoft. *AesGcm Class*. Microsoft Learn. https://learn.microsoft.com/dotnet/api/system.security.cryptography.aesgcm
-- [29] Dworkin, M. (2007). *NIST Special Publication 800-38D: Recommendation for Block Cipher Modes of Operation: Galois/Counter Mode (GCM) and GMAC*. NIST. https://doi.org/10.6028/NIST.SP.800-38D
-- [30] McGrew, D. (2008). *RFC 5116: An Interface and Algorithms for Authenticated Encryption*. IETF. https://www.rfc-editor.org/rfc/rfc5116
-- [31] Microsoft. *ASP.NET Core Blazor forms validation*. Microsoft Learn. https://learn.microsoft.com/aspnet/core/blazor/forms/validation
-- [32] Tufte, E. R. (1990). *Envisioning Information*. Cheshire, CT: Graphics Press.
-- [33] Nielsen, J. (1994, updated 2024). *10 Usability Heuristics for User Interface Design — Visibility of system status*. Nielsen Norman Group. https://www.nngroup.com/articles/ten-usability-heuristics/
-- [34] Docker. *Multi-stage builds*. Docker Documentation. https://docs.docker.com/build/building/multi-stage/
-- [35] The Independent Institute of Education (2026). *PROG7312 Portfolio of Evidence Guide, Part 1*. The IIE.
-- [36] Microsoft. *Dictionary<TKey,TValue> Class*. Microsoft Learn. https://learn.microsoft.com/dotnet/api/system.collections.generic.dictionary-2
-- [37] Wikipedia. *Simple linear regression*. https://en.wikipedia.org/wiki/Simple_linear_regression
-- [38] Wikipedia. *Coefficient of determination*. https://en.wikipedia.org/wiki/Coefficient_of_determination
-- [39] Microsoft. *Lock Class (System.Threading)*. Microsoft Learn. https://learn.microsoft.com/dotnet/api/system.threading.lock
-- [40] Microsoft. *SemaphoreSlim Class*. Microsoft Learn. https://learn.microsoft.com/dotnet/api/system.threading.semaphoreslim
-- [41] Microsoft. *PeriodicTimer Class*. Microsoft Learn. https://learn.microsoft.com/dotnet/api/system.threading.periodictimer
-- [42] Microsoft. *IncrementalHash Class*. Microsoft Learn. https://learn.microsoft.com/dotnet/api/system.security.cryptography.incrementalhash
-- [43] Microsoft. *BinaryPrimitives Class*. Microsoft Learn. https://learn.microsoft.com/dotnet/api/system.buffers.binary.binaryprimitives
-- [44] Microsoft. *Interlocked Class*. Microsoft Learn. https://learn.microsoft.com/dotnet/api/system.threading.interlocked
-- [45] Microsoft. *ASP.NET Core Blazor file uploads (InputFile)*. Microsoft Learn. https://learn.microsoft.com/aspnet/core/blazor/file-uploads
-- [46] Microsoft. *UTF8Encoding Constructor (throwOnInvalidBytes)*. Microsoft Learn. https://learn.microsoft.com/dotnet/api/system.text.utf8encoding.-ctor
-- [47] Microsoft. *ASP.NET Core SignalR .NET client - automatically reconnect*. Microsoft Learn. https://learn.microsoft.com/aspnet/core/signalr/dotnet-client#automatically-reconnect
-- [48] Microsoft. *Random.Shuffle Method*. Microsoft Learn. https://learn.microsoft.com/dotnet/api/system.random.shuffle
-- [49] Microsoft. *Validator.TryValidateObject Method*. Microsoft Learn. https://learn.microsoft.com/dotnet/api/system.componentmodel.dataannotations.validator.tryvalidateobject
 
+References follow the IEEE style. Numbers match the `// Reference [N]` comments in the source and section 27 of [HOW_IT_WORKS.md](HOW_IT_WORKS.md).
+
+[1] Microsoft, "Generics in C#," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/csharp/fundamentals/types/generics  
+[2] Microsoft, "How to serialize and deserialize JSON using System.Text.Json," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/standard/serialization/system-text-json/how-to  
+[3] Microsoft, "Generic math (System.Numerics.INumber&lt;T&gt;)," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/standard/generics/math  
+[4] Microsoft, "ASP.NET Core Blazor hosting models," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/aspnet/core/blazor/hosting-models  
+[5] Microsoft, "Minimal APIs overview," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/aspnet/core/fundamentals/minimal-apis/overview  
+[6] Microsoft, "HttpClient.Timeout Property," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/api/system.net.http.httpclient.timeout  
+[7] Microsoft, "Response compression in ASP.NET Core," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/aspnet/core/performance/response-compression  
+[8] Microsoft, "Operator overloading: Predefined unary, arithmetic and comparison operators," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/csharp/language-reference/operators/operator-overloading  
+[9] Microsoft, "EqualityComparer&lt;T&gt;.Default Property," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/api/system.collections.generic.equalitycomparer-1.default  
+[10] Microsoft, "Structure types: readonly struct and in parameters," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/csharp/language-reference/builtin-types/struct  
+[11] Microsoft, "How to define value equality for a type," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/csharp/programming-guide/statements-expressions-operators/how-to-define-value-equality-for-a-type  
+[12] Wikipedia, "Circular buffer," Wikipedia, The Free Encyclopedia. Accessed: Oct. 18, 2026. [Online]. Available: https://en.wikipedia.org/wiki/Circular_buffer  
+[13] Microsoft, "Jagged arrays (C# programming guide)," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/csharp/programming-guide/arrays/jagged-arrays  
+[14] Microsoft, "Multidimensional arrays (C# programming guide)," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/csharp/language-reference/builtin-types/arrays  
+[15] Microsoft, "Span&lt;T&gt; Struct," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/api/system.span-1  
+[16] Microsoft, "StackOverflowException Class," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/api/system.stackoverflowexception  
+[17] Microsoft, "Handle errors in ASP.NET Core: Problem details and ValidationProblem," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/aspnet/core/fundamentals/minimal-apis/handle-errors  
+[18] Microsoft, "ConcurrentDictionary&lt;TKey,TValue&gt; Class," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/api/system.collections.concurrent.concurrentdictionary-2  
+[19] Wikipedia, "Standard score," Wikipedia, The Free Encyclopedia. Accessed: Oct. 18, 2026. [Online]. Available: https://en.wikipedia.org/wiki/Standard_score  
+[20] Wikipedia, "68-95-99.7 rule," Wikipedia, The Free Encyclopedia. Accessed: Oct. 18, 2026. [Online]. Available: https://en.wikipedia.org/wiki/68%E2%80%9395%E2%80%9399.7_rule  
+[21] Wikipedia, "Alarm fatigue," Wikipedia, The Free Encyclopedia. Accessed: Oct. 18, 2026. [Online]. Available: https://en.wikipedia.org/wiki/Alarm_fatigue  
+[22] Microsoft, "Introduction to ASP.NET Core SignalR," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/aspnet/core/signalr/introduction  
+[23] Microsoft, "Background tasks with hosted services in ASP.NET Core," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/aspnet/core/fundamentals/host/hosted-services  
+[24] Microsoft, "Upload files in ASP.NET Core: Uploading large files with streaming," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/aspnet/core/mvc/models/file-uploads  
+[25] Microsoft, "Configure options for the ASP.NET Core Kestrel web server: MaxRequestBodySize," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/aspnet/core/fundamentals/servers/kestrel/options  
+[26] OWASP Foundation, "File Upload Cheat Sheet," OWASP Cheat Sheet Series. Accessed: Oct. 18, 2026. [Online]. Available: https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html  
+[27] OWASP Foundation, "Path Traversal," OWASP Community. Accessed: Oct. 18, 2026. [Online]. Available: https://owasp.org/www-community/attacks/Path_Traversal  
+[28] Microsoft, "AesGcm Class," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/api/system.security.cryptography.aesgcm  
+[29] M. Dworkin, "Recommendation for block cipher modes of operation: Galois/Counter Mode (GCM) and GMAC," National Institute of Standards and Technology, Gaithersburg, MD, USA, NIST Special Publication 800-38D, Nov. 2007. doi: 10.6028/NIST.SP.800-38D.  
+[30] D. McGrew, "An interface and algorithms for authenticated encryption," Internet Engineering Task Force, RFC 5116, Jan. 2008. [Online]. Available: https://www.rfc-editor.org/rfc/rfc5116  
+[31] Microsoft, "ASP.NET Core Blazor forms validation," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/aspnet/core/blazor/forms/validation  
+[32] E. R. Tufte, *Envisioning Information*. Cheshire, CT, USA: Graphics Press, 1990.  
+[33] J. Nielsen, "10 usability heuristics for user interface design," Nielsen Norman Group, 1994, updated 2024. Accessed: Oct. 18, 2026. [Online]. Available: https://www.nngroup.com/articles/ten-usability-heuristics/  
+[34] Docker Inc., "Multi-stage builds," Docker Docs. Accessed: Oct. 18, 2026. [Online]. Available: https://docs.docker.com/build/building/multi-stage/  
+[35] The Independent Institute of Education, "PROG7312 Portfolio of Evidence Guide, Part 1," The IIE, 2026.  
+[36] Microsoft, "Dictionary&lt;TKey,TValue&gt; Class," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/api/system.collections.generic.dictionary-2  
+[37] Wikipedia, "Simple linear regression," Wikipedia, The Free Encyclopedia. Accessed: Oct. 18, 2026. [Online]. Available: https://en.wikipedia.org/wiki/Simple_linear_regression  
+[38] Wikipedia, "Coefficient of determination," Wikipedia, The Free Encyclopedia. Accessed: Oct. 18, 2026. [Online]. Available: https://en.wikipedia.org/wiki/Coefficient_of_determination  
+[39] Microsoft, "Lock Class (System.Threading)," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/api/system.threading.lock  
+[40] Microsoft, "SemaphoreSlim Class," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/api/system.threading.semaphoreslim  
+[41] Microsoft, "PeriodicTimer Class," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/api/system.threading.periodictimer  
+[42] Microsoft, "IncrementalHash Class," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/api/system.security.cryptography.incrementalhash  
+[43] Microsoft, "BinaryPrimitives Class," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/api/system.buffers.binary.binaryprimitives  
+[44] Microsoft, "Interlocked Class," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/api/system.threading.interlocked  
+[45] Microsoft, "ASP.NET Core Blazor file uploads (InputFile)," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/aspnet/core/blazor/file-uploads  
+[46] Microsoft, "UTF8Encoding Constructor (throwOnInvalidBytes)," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/api/system.text.utf8encoding.-ctor  
+[47] Microsoft, "ASP.NET Core SignalR .NET client: Automatically reconnect," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/aspnet/core/signalr/dotnet-client#automatically-reconnect  
+[48] Microsoft, "Random.Shuffle Method," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/api/system.random.shuffle  
+[49] Microsoft, "Validator.TryValidateObject Method," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/api/system.componentmodel.dataannotations.validator.tryvalidateobject  
+[50] Microsoft, "HashSet&lt;T&gt; Class," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/api/system.collections.generic.hashset-1  
+[51] Microsoft, "Stack&lt;T&gt; Class," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/api/system.collections.generic.stack-1  
+[52] Microsoft, "Queue&lt;T&gt; Class," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/api/system.collections.generic.queue-1  
+[53] Microsoft, "PriorityQueue&lt;TElement,TPriority&gt; Class," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/api/system.collections.generic.priorityqueue-2  
+[54] Microsoft, "SortedDictionary&lt;TKey,TValue&gt; Class," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/api/system.collections.generic.sorteddictionary-2  
+[55] Microsoft, "File.Move Method," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/api/system.io.file.move  

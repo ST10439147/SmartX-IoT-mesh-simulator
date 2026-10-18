@@ -52,7 +52,7 @@ public sealed class TelemetryStore
 
     // SortedDictionary is not thread-safe: the worker writes while requests read, so
     // every touch of one sensor's log locks that log.
-    // Reference: Microsoft. SortedDictionary<TKey,TValue> Class. Microsoft Learn.
+    // Reference [54]: Microsoft. SortedDictionary<TKey,TValue> Class. Microsoft Learn.
     //   https://learn.microsoft.com/dotnet/api/system.collections.generic.sorteddictionary-2
     private readonly ConcurrentDictionary<string, SortedDictionary<(DateTimeOffset At, long Sequence), TimelinePoint>> _timelines = new(StringComparer.OrdinalIgnoreCase);
 
@@ -76,7 +76,7 @@ public sealed class TelemetryStore
     public static string KeyFor(string macOrId) => macOrId.Trim().Replace('-', ':').ToUpperInvariant();
 
     /// <summary>The registry lookup: one hash probe by MAC or id, counted so it can be shown.</summary>
-    // Reference: Microsoft. Dictionary<TKey,TValue> Class. Microsoft Learn.
+    // Reference [36]: Microsoft. Dictionary<TKey,TValue> Class. Microsoft Learn.
     //   https://learn.microsoft.com/dotnet/api/system.collections.generic.dictionary-2
     public bool TryGet(string macOrId, out SensorRegistration sensor)
     {

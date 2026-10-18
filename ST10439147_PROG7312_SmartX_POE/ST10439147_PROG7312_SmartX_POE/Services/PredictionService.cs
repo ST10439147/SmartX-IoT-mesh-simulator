@@ -53,10 +53,14 @@ public sealed class PredictionService
     /// </summary>
     public const int MinOccurrences = 2;
 
+    // Reference [52]: Microsoft. Queue<T> Class. Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/api/system.collections.generic.queue-1
     private readonly Queue<OperatorAction> _log = new();
 
     // "sensor|kind>>follow-up" for every pair already counted during a fault that is still open.
     // Entries are dropped when their fault closes, so the next occurrence counts afresh.
+    // Reference [50]: Microsoft. HashSet<T> Class. Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/api/system.collections.generic.hashset-1
     private readonly HashSet<string> _counted = new(StringComparer.OrdinalIgnoreCase);
     private Suggestion? _latest;
     private readonly Dictionary<string, Dictionary<string, int>> _pairs = new(StringComparer.OrdinalIgnoreCase);
@@ -105,6 +109,8 @@ public sealed class PredictionService
         => _pairs[context] = new(habits.ToDictionary(h => h.FollowUp, h => h.Count), StringComparer.OrdinalIgnoreCase);
 
     // Written under the lock, to a temp file then moved over, so a crash mid-write cannot leave half a file.
+    // Reference [55]: Microsoft. File.Move Method. Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/api/system.io.file.move
     private void Save()
     {
         if (_path is null) return;

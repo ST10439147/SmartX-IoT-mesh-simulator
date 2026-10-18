@@ -24,7 +24,7 @@ public sealed record OverrideCommand(long Id, string Label, DateTimeOffset Issue
 /// </summary>
 // ponytail: the history is unbounded - fine at the rate an operator clicks. Cap it (drop
 // the oldest) if commands are ever issued by automation.
-// Reference: Microsoft. Stack<T> Class. Microsoft Learn.
+// Reference [51]: Microsoft. Stack<T> Class. Microsoft Learn.
 //   https://learn.microsoft.com/dotnet/api/system.collections.generic.stack-1
 public sealed class CommandService
 {

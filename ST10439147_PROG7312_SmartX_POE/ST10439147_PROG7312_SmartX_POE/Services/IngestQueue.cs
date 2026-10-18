@@ -35,9 +35,9 @@ public readonly record struct QueuedPacket(
 // Neither collection is thread-safe and many requests enqueue while one worker dequeues,
 // so every touch goes through the lock. The semaphore counts waiting packets across both
 // lanes: the worker sleeps on it instead of spinning on an empty queue.
-// Reference: Microsoft. Queue<T> Class. Microsoft Learn.
+// Reference [52]: Microsoft. Queue<T> Class. Microsoft Learn.
 //   https://learn.microsoft.com/dotnet/api/system.collections.generic.queue-1
-// Reference: Microsoft. PriorityQueue<TElement,TPriority> Class. Microsoft Learn.
+// Reference [53]: Microsoft. PriorityQueue<TElement,TPriority> Class. Microsoft Learn.
 //   https://learn.microsoft.com/dotnet/api/system.collections.generic.priorityqueue-2
 /// <summary>
 /// A packet the worker has finished with. <see cref="Position"/> is the order it was
