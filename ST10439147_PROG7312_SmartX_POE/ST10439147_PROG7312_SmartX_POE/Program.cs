@@ -13,7 +13,7 @@ using SmartX.Shared.Topology;
 // `dotnet run --project src/SmartX.Api -- --selftest` runs the data-structure and
 // crypto checks and exits. Non-zero means something is broken.
 if (args.Contains("--selftest"))
-    return SelfCheckRunner.Run();
+    return await SelfCheckRunner.RunAsync();
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -85,12 +85,12 @@ api.MapGet("/sensors/{id}", (string id, TelemetryStore store) =>
 // Operator search: case-insensitive substring over name, id, deployment path and category.
 // It runs on the gateway rather than filtering in the browser so every search is an event
 // the gateway sees - the predictive engine learns from them.
-api.MapGet("/search", ([FromQuery] string? q, TelemetryStore store, PredictionService predictions) =>
+api.MapGet("/search", async ([FromQuery] string? q, TelemetryStore store, PredictionService predictions) =>
 {
     if (string.IsNullOrWhiteSpace(q)) return Results.BadRequest(new { message = "Give a search term (q)." });
 
     var term = q.Trim();
-    predictions.Record(OperatorActionKind.Search, term);
+    await predictions.RecordAsync(OperatorActionKind.Search, term);
 
     return Results.Ok(store.Snapshots().Where(s =>
         s.DisplayName.Contains(term, StringComparison.OrdinalIgnoreCase)
@@ -252,7 +252,7 @@ api.MapGet("/commands/history", (CommandService commands) => Results.Ok(commands
 
 // Pins one actuator (sensorId) or every actuator of a kind (category) on or off.
 // "Shut all valves" is { "category": "IrrigationValve", "state": false }.
-api.MapPost("/commands", (CommandRequest request, TelemetryStore store, CommandService commands, PredictionService predictions) =>
+api.MapPost("/commands", async (CommandRequest request, TelemetryStore store, CommandService commands, PredictionService predictions) =>
 {
     List<SensorRegistration> targets;
 
@@ -283,15 +283,15 @@ api.MapPost("/commands", (CommandRequest request, TelemetryStore store, CommandS
         : $"Switch all {targets[0].Category.Spec().Label} devices {action}";
 
     var command = commands.Issue(label, targets.Select(s => s.Id), request.State);
-    predictions.Record(OperatorActionKind.Command, label);
+    await predictions.RecordAsync(OperatorActionKind.Command, label);
     return Results.Ok(command);
 });
 
-api.MapPost("/commands/undo", (CommandService commands, PredictionService predictions) =>
+api.MapPost("/commands/undo", async (CommandService commands, PredictionService predictions) =>
 {
     if (!commands.TryUndo(out var undone)) return Results.Conflict(new { message = "Nothing to undo." });
 
-    predictions.Record(OperatorActionKind.Command, $"Undo {undone!.Label}");
+    await predictions.RecordAsync(OperatorActionKind.Command, $"Undo {undone!.Label}");
     return Results.Ok(undone);
 });
 
@@ -299,33 +299,33 @@ api.MapPost("/commands/undo", (CommandService commands, PredictionService predic
 
 // Every search and command, newest first, with the alert (Category|AlertKind) that was
 // on the rail when it was made. A null context means nothing was alerting.
-api.MapGet("/predictions/log", (PredictionService predictions) => predictions.Log);
+api.MapGet("/predictions/log", (PredictionService predictions, CancellationToken ct) => predictions.LogAsync(ct));
 
 // Forgets everything learned so the engine can be shown learning from scratch.
-api.MapPost("/predictions/reset", (PredictionService predictions) =>
+api.MapPost("/predictions/reset", async (PredictionService predictions) =>
 {
-    predictions.Reset();
+    await predictions.ResetAsync();
     return Results.NoContent();
 });
 
 // The dictionary of counters: every event seen, each with its follow-ups ranked.
-api.MapGet("/predictions/pairs", (PredictionService predictions) => predictions.Pairs);
+api.MapGet("/predictions/pairs", (PredictionService predictions, CancellationToken ct) => predictions.PairsAsync(ct));
 
 // The suggestion for the alert that is driving the operator right now, so a dashboard
 // opened mid-alert still shows it. 204 when there is none. New ones are pushed as
 // HubEvents.SuggestionReady the moment their alert is raised.
-api.MapGet("/predictions/suggestion", (PredictionService predictions) =>
-    predictions.Current is { } suggestion ? Results.Ok(suggestion) : Results.NoContent());
+api.MapGet("/predictions/suggestion", async (PredictionService predictions, CancellationToken ct) =>
+    await predictions.CurrentAsync(ct) is { } suggestion ? Results.Ok(suggestion) : Results.NoContent());
 
 // Every learned event with its ranked follow-ups, open faults first; seeded on first run and kept across restarts.
-api.MapGet("/predictions/insights", (PredictionService predictions) => predictions.Insights());
+api.MapGet("/predictions/insights", (PredictionService predictions, CancellationToken ct) => predictions.InsightsAsync(ct));
 
 // Devices under their threshold but projected to cross it within the trend horizon, soonest first.
-api.MapGet("/predictions/trends", (PredictionService predictions) => predictions.TrendFlags());
+api.MapGet("/predictions/trends", (PredictionService predictions, CancellationToken ct) => predictions.TrendFlagsAsync(ct));
 
 // The top follow-ups to one event, e.g. ?context=SoilMoisture|ThresholdBreach&top=3.
-api.MapGet("/predictions/rank", ([FromQuery] string context, PredictionService predictions, [FromQuery] int top = 3) =>
-    predictions.Rank(context, Math.Clamp(top, 1, 20)));
+api.MapGet("/predictions/rank", ([FromQuery] string context, PredictionService predictions, CancellationToken ct, [FromQuery] int top = 3) =>
+    predictions.RankAsync(context, Math.Clamp(top, 1, 20), ct));
 
 // Returns the typed packets themselves, so TelemetryPacket<T> is what crosses the wire
 // rather than a flattened DTO. The client deserialises straight back into the same type.

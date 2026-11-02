@@ -16,7 +16,7 @@ namespace SmartX.Api;
 /// </summary>
 internal static class SelfCheckRunner
 {
-    public static int Run()
+    public static async Task<int> RunAsync()
     {
         Console.WriteLine("SmartX self-check");
         Console.WriteLine(new string('-', 64));
@@ -44,13 +44,16 @@ internal static class SelfCheckRunner
             foreach (var line in RunDisconnectChecks())
                 Console.WriteLine($"  ok  {line}");
 
-            foreach (var line in RunPredictionLogChecks())
+            foreach (var line in await RunPredictionLogChecksAsync())
                 Console.WriteLine($"  ok  {line}");
 
-            foreach (var line in RunPersistenceChecks())
+            foreach (var line in await RunPersistenceChecksAsync())
                 Console.WriteLine($"  ok  {line}");
 
-            foreach (var line in RunTrendChecks())
+            foreach (var line in await RunConcurrencyChecksAsync())
+                Console.WriteLine($"  ok  {line}");
+
+            foreach (var line in await RunTrendChecksAsync())
                 Console.WriteLine($"  ok  {line}");
         }
         catch (Exception ex)
@@ -394,7 +397,7 @@ internal static class SelfCheckRunner
         return log;
     }
     //----------------------------------------------------------------------------------------------------------------------//
-    private static IEnumerable<string> RunPredictionLogChecks()
+    private static async Task<IEnumerable<string>> RunPredictionLogChecksAsync()
     {
         var log = new List<string>();
         var store = new TelemetryStore();
@@ -411,27 +414,28 @@ internal static class SelfCheckRunner
         });
 
         // Nothing wrong: the action is logged with no context.
-        Assert(predictions.Record(OperatorActionKind.Search, "valve").Contexts.Count == 0, "with no fault open an action has no context");
+        Assert((await predictions.RecordAsync(OperatorActionKind.Search, "valve")).Contexts.Count == 0, "with no fault open an action has no context");
 
         // The probe goes silent, then the operator searches. The search is tied to that open fault.
         var lastHeard = DateTimeOffset.UtcNow;
         store.Ingest(new TelemetryPacket<float>(probe.Id, 31f, probe.Category, lastHeard));
         var outage = engine.SweepForSilence(lastHeard.AddSeconds(8))[0];
 
-        var search = predictions.Record(OperatorActionKind.Search, "  Pump ");
+        var search = await predictions.RecordAsync(OperatorActionKind.Search, "  Pump ");
         Assert(search.Contexts.SequenceEqual(["SoilMoisture|Silence"]),
             $"a search during a moisture outage should carry that fault, got '{string.Join(", ", search.Contexts)}'");
         Assert(search.FollowUp == "Search:pump", "search terms are normalised so 'Pump ' and 'pump' are one follow-up");
 
         // Repeating an action during the same fault is one habit, not several.
-        predictions.Record(OperatorActionKind.Search, "pump");
-        predictions.Record(OperatorActionKind.Search, "PUMP");
-        Assert(predictions.Rank("SoilMoisture|Silence").Single().Count == 1, "repeats during one fault should count once");
-        Assert(predictions.Suggest(outage) is null, "one search is not a habit yet, so nothing is suggested");
+        await predictions.RecordAsync(OperatorActionKind.Search, "pump");
+        await predictions.RecordAsync(OperatorActionKind.Search, "PUMP");
+        Assert((await predictions.RankAsync("SoilMoisture|Silence")).Single().Count == 1, "repeats during one fault should count once");
+        Assert(await predictions.SuggestAsync(outage) is null, "one search is not a habit yet, so nothing is suggested");
 
-        var command = predictions.Record(OperatorActionKind.Command, "Switch Borehole Pump on");
+        var command = await predictions.RecordAsync(OperatorActionKind.Command, "Switch Borehole Pump on");
         Assert(command.FollowUp == "Command:Switch Borehole Pump on", "command labels are kept as issued");
-        Assert(predictions.Log[0] == command && predictions.Log.Count == 5, "the log is newest first and holds every action");
+        var entries = await predictions.LogAsync();
+        Assert(entries[0] == command && entries.Count == 5, "the log is newest first and holds every action");
 
         // The fault closes and a new one opens: the same search now counts again. Pump outranks the command.
         var back = DateTimeOffset.UtcNow;
@@ -439,33 +443,33 @@ internal static class SelfCheckRunner
         engine.SweepForSilence(back.AddSeconds(1));
         store.Ingest(new TelemetryPacket<float>(probe.Id, 31f, probe.Category, back.AddSeconds(30)));
         var secondOutage = engine.SweepForSilence(back.AddSeconds(38))[0];
-        predictions.Suggest(secondOutage);   // raising the alert is what starts a new count
-        predictions.Record(OperatorActionKind.Search, "pump");
-        predictions.Record(OperatorActionKind.Search, "PUMP");
-        var ranked = predictions.Rank("SoilMoisture|Silence");
+        await predictions.SuggestAsync(secondOutage);   // raising the alert is what starts a new count
+        await predictions.RecordAsync(OperatorActionKind.Search, "pump");
+        await predictions.RecordAsync(OperatorActionKind.Search, "PUMP");
+        var ranked = await predictions.RankAsync("SoilMoisture|Silence");
         Assert(ranked.Count == 2 && ranked[0] == new RankedFollowUp("Search:pump", 2) && ranked[1].Count == 1,
             $"pump searched in two separate faults should rank first, got {string.Join(", ", ranked)}");
-        Assert(predictions.Rank("SoilMoisture|Silence", top: 1).Count == 1, "top limits the ranking");
-        Assert(predictions.Rank("TankLevel|Spike").Count == 0, "an event never seen has no follow-ups");
-        Assert(predictions.Pairs.Keys.SequenceEqual(["SoilMoisture|Silence"]), "an action with no alert open forms no pair");
+        Assert((await predictions.RankAsync("SoilMoisture|Silence", top: 1)).Count == 1, "top limits the ranking");
+        Assert((await predictions.RankAsync("TankLevel|Spike")).Count == 0, "an event never seen has no follow-ups");
+        Assert((await predictions.PairsAsync()).Keys.SequenceEqual(["SoilMoisture|Silence"]), "an action with no alert open forms no pair");
 
         // The moisture alert comes round again: the pump is suggested on its own. The command,
         // done only once, is below MinOccurrences and is left out.
-        var suggestion = predictions.Suggest(outage);
+        var suggestion = await predictions.SuggestAsync(outage);
         Assert(suggestion is { FollowUps.Count: 1 } && suggestion.FollowUps[0].FollowUp == "Search:pump",
             "a repeated moisture-then-pump pattern should suggest the pump when the alert recurs");
-        Assert(predictions.Current == suggestion, "the latest suggestion is kept for a dashboard that opens mid-alert");
-        Assert(predictions.Suggest(outage with { Kind = AlertKind.Spike }) is null, "a different event has nothing learned to suggest");
-        Assert(predictions.Suggest(outage with { Suppressed = true }) is null, "a suppressed alert gets no suggestion");
+        Assert(await predictions.CurrentAsync() == suggestion, "the latest suggestion is kept for a dashboard that opens mid-alert");
+        Assert(await predictions.SuggestAsync(outage with { Kind = AlertKind.Spike }) is null, "a different event has nothing learned to suggest");
+        Assert(await predictions.SuggestAsync(outage with { Suppressed = true }) is null, "a suppressed alert gets no suggestion");
 
         // The node reports again, so the fault is closed: what the operator does now is not a reaction to it.
         back = DateTimeOffset.UtcNow.AddMinutes(1);
         store.Ingest(new TelemetryPacket<float>(probe.Id, 31f, probe.Category, back));
         engine.SweepForSilence(back.AddSeconds(1));
-        Assert(predictions.Record(OperatorActionKind.Search, "pump").Contexts.Count == 0, "once the fault closes, actions are no longer tied to it");
+        Assert((await predictions.RecordAsync(OperatorActionKind.Search, "pump")).Contexts.Count == 0, "once the fault closes, actions are no longer tied to it");
 
-        for (var i = 0; i < PredictionService.MaxLog; i++) predictions.Record(OperatorActionKind.Search, $"s{i}");
-        Assert(predictions.Log.Count == PredictionService.MaxLog, "the log drops its oldest entries past the cap");
+        for (var i = 0; i < PredictionService.MaxLog; i++) await predictions.RecordAsync(OperatorActionKind.Search, $"s{i}");
+        Assert((await predictions.LogAsync()).Count == PredictionService.MaxLog, "the log drops its oldest entries past the cap");
 
         log.Add("prediction log: every search and command is logged with the alert that was open at the time");
         log.Add("dictionary of counters: after-X-did-Y pairs are counted and the most frequent follow-up ranks first");
@@ -473,7 +477,7 @@ internal static class SelfCheckRunner
         return log;
     }
     //----------------------------------------------------------------------------------------------------------------------//
-    private static IEnumerable<string> RunPersistenceChecks()
+    private static async Task<IEnumerable<string>> RunPersistenceChecksAsync()
     {
         var log = new List<string>();
         var path = Path.Combine(Path.GetTempPath(), $"smartx-predictions-{Guid.NewGuid():N}.json");
@@ -484,7 +488,7 @@ internal static class SelfCheckRunner
             var engine = new AnomalyEngine(store, new CommandService(), NullLogger<AnomalyEngine>.Instance);
 
             var first = new PredictionService(store, engine, path);
-            var seeded = first.Insights();
+            var seeded = await first.InsightsAsync();
             Assert(seeded.Count >= 3 && seeded.All(i => !i.Open), "a first run starts from seeded habits, none of them open");
             Assert(seeded.SelectMany(i => i.FollowUps).All(f => f.Count >= PredictionService.MinOccurrences), "insights list only follow-ups that are a habit");
 
@@ -497,17 +501,17 @@ internal static class SelfCheckRunner
             var heard = DateTimeOffset.UtcNow;
             store.Ingest(new TelemetryPacket<float>(probe.Id, 31f, probe.Category, heard));
             engine.SweepForSilence(heard.AddSeconds(8));
-            first.Record(OperatorActionKind.Search, "valve");
-            Assert(first.Insights().Any(i => i.Open && i.Devices.Contains("Persist probe")), "a learned event with a fault open now is flagged open, naming the device");
+            await first.RecordAsync(OperatorActionKind.Search, "valve");
+            Assert((await first.InsightsAsync()).Any(i => i.Open && i.Devices.Contains("Persist probe")), "a learned event with a fault open now is flagged open, naming the device");
 
             var second = new PredictionService(store, engine, path);
-            Assert(second.Rank("SoilMoisture|Silence").Any(f => f.FollowUp == "Search:valve" && f.Count == 3), "a restart reloads what was learned (seed 2 + 1 new)");
-            Assert(second.Insights().Count == first.Insights().Count, "a restart does not re-seed over saved counters");
+            Assert((await second.RankAsync("SoilMoisture|Silence")).Any(f => f.FollowUp == "Search:valve" && f.Count == 3), "a restart reloads what was learned (seed 2 + 1 new)");
+            Assert((await second.InsightsAsync()).Count == (await first.InsightsAsync()).Count, "a restart does not re-seed over saved counters");
 
             // Reset starts the engine cold, and stays cold across a restart.
-            second.Reset();
-            Assert(second.Pairs.Count == 0 && second.Log.Count == 0 && second.Insights().Count == 0 && second.Current is null, "reset forgets everything learned");
-            Assert(new PredictionService(store, engine, path).Pairs.Count == 0, "a reset engine is not re-seeded on restart");
+            await second.ResetAsync();
+            Assert((await second.PairsAsync()).Count == 0 && (await second.LogAsync()).Count == 0 && (await second.InsightsAsync()).Count == 0 && await second.CurrentAsync() is null, "reset forgets everything learned");
+            Assert((await new PredictionService(store, engine, path).PairsAsync()).Count == 0, "a reset engine is not re-seeded on restart");
         }
         finally
         {
@@ -518,7 +522,47 @@ internal static class SelfCheckRunner
         return log;
     }
     //----------------------------------------------------------------------------------------------------------------------//
-    private static IEnumerable<string> RunTrendChecks()
+    private static async Task<IEnumerable<string>> RunConcurrencyChecksAsync()
+    {
+        var log = new List<string>();
+        var path = Path.Combine(Path.GetTempPath(), $"smartx-predictions-{Guid.NewGuid():N}.json");
+
+        try
+        {
+            var store = new TelemetryStore();
+            var engine = new AnomalyEngine(store, new CommandService(), NullLogger<AnomalyEngine>.Instance);
+            var predictions = new PredictionService(store, engine, path);
+
+            var probe = store.Register(new SensorRegistration
+            {
+                MacAddress = "A4:CF:12:9B:09:01", DisplayName = "Concurrent probe", DeploymentPath = "Facility A/Zone 1/Sub-Zone A",
+                Category = SensorCategory.SoilMoisture, PublishIntervalSeconds = 2
+            });
+            var heard = DateTimeOffset.UtcNow;
+            store.Ingest(new TelemetryPacket<float>(probe.Id, 31f, probe.Category, heard));
+            engine.SweepForSilence(heard.AddSeconds(8));
+
+            // Every call arrives at once, on a cold engine: one load, no lost counts, the last save holds them all.
+            const int actions = 100;
+            await Task.WhenAll(Enumerable.Range(0, actions).Select(i =>
+                Task.Run(() => predictions.RecordAsync(OperatorActionKind.Search, $"term{i}"))));
+
+            Assert((await predictions.LogAsync()).Count == actions, "every concurrent action should be logged");
+
+            var row = await new PredictionService(store, engine, path).RankAsync("SoilMoisture|Silence", int.MaxValue);
+            Assert(row.Count == actions + 1 && row[0] == new RankedFollowUp("Search:valve", 2),
+                $"the saved file should hold the seeded habit and all {actions} new ones, holds {row.Count}");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+
+        log.Add("async gate: concurrent actions on a cold engine load once, lose no counts and all reach the saved file");
+        return log;
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    private static async Task<IEnumerable<string>> RunTrendChecksAsync()
     {
         var log = new List<string>();
         var store = new TelemetryStore();
@@ -547,7 +591,7 @@ internal static class SelfCheckRunner
         Probe(3, i => 30f + 0.01f * i);                 // climbing, but would take half an hour
         Probe(4, i => 40f + 0.3f * i);                  // already over 45: a breach, not a trend
 
-        var flags = predictions.TrendFlags();
+        var flags = await predictions.TrendFlagsAsync();
         Assert(flags.Count == 1 && flags[0].SensorId == climbing,
             $"only the steady climb close to its threshold should be flagged, got {string.Join(", ", flags.Select(f => f.SensorName))}");
         Assert(Math.Abs(flags[0].SecondsToThreshold - 42) < 1 && Math.Abs(flags[0].SlopePerSecond - 0.15) < 1e-3,

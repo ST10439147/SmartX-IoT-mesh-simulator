@@ -33,6 +33,10 @@ public sealed record OperatorAction(
 /// follow-up Y to the number of times the operator did Y after X. Recording an action is
 /// two O(1) lookups and an increment; ranking an event's follow-ups sorts only that
 /// event's row, which holds the handful of things operators actually do in response to it.</para>
+///
+/// <para>Every operation is an awaited method. State is guarded by an async gate rather than a
+/// lock, and the saved file is read and written with async I/O, so a request or the ingest
+/// worker waiting on the engine or the disk gives its thread back instead of blocking it.</para>
 /// </summary>
 // ponytail: the log keeps the last MaxLog actions only - enough to inspect what was learned.
 // The counters are not capped and outlive the log. Persist both if predictions have to survive a restart.
@@ -64,16 +68,18 @@ public sealed class PredictionService
     private readonly HashSet<string> _counted = new(StringComparer.OrdinalIgnoreCase);
     private Suggestion? _latest;
     private readonly Dictionary<string, Dictionary<string, int>> _pairs = new(StringComparer.OrdinalIgnoreCase);
-    // Reference [39]: Microsoft. Lock Class (System.Threading). Microsoft Learn.
-    //   https://learn.microsoft.com/dotnet/api/system.threading.lock
-    private readonly Lock _gate = new();
+    // A semaphore, not a lock: the holder awaits the disk write, which a lock does not allow.
+    // Reference [40]: Microsoft. SemaphoreSlim Class. Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/api/system.threading.semaphoreslim
+    private readonly SemaphoreSlim _gate = new(1, 1);
+    private bool _loaded;
     private readonly TelemetryStore store;
     private readonly AnomalyEngine anomalies;
     private readonly string? _path;
 
     /// <summary>
     /// With a <paramref name="persistPath"/> the learned counters survive a restart: they
-    /// are loaded from it, and the very first run (no file yet) starts from a few typical
+    /// are loaded from it on first use, and the very first run (no file yet) starts from a few typical
     /// operator habits so the panel has something real to show before anyone has clicked.
     /// Without one (the self-checks) the engine starts empty and touches no disk.
     /// </summary>
@@ -82,14 +88,44 @@ public sealed class PredictionService
         this.store = store;
         this.anomalies = anomalies;
         _path = persistPath is null ? null : Path.GetFullPath(persistPath);
+    }
 
+    /// <summary>Takes the gate, loading the saved counters if this is the first caller. Dispose to release.</summary>
+    private async Task<GateHold> EnterAsync(CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct);
+
+        try
+        {
+            if (!_loaded)
+            {
+                await LoadAsync();
+                _loaded = true;
+            }
+
+            return new GateHold(_gate);
+        }
+        catch
+        {
+            _gate.Release();
+            throw;
+        }
+    }
+
+    private readonly struct GateHold(SemaphoreSlim gate) : IDisposable
+    {
+        public void Dispose() => gate.Release();
+    }
+
+    private async Task LoadAsync()
+    {
         if (_path is null) return;
 
         try
         {
             if (File.Exists(_path))
             {
-                var saved = JsonSerializer.Deserialize<Dictionary<string, Dictionary<string, int>>>(File.ReadAllText(_path)) ?? [];
+                var saved = JsonSerializer.Deserialize<Dictionary<string, Dictionary<string, int>>>(await File.ReadAllTextAsync(_path)) ?? [];
                 foreach (var (context, row) in saved) _pairs[context] = new(row, StringComparer.OrdinalIgnoreCase);
                 return;
             }
@@ -102,23 +138,25 @@ public sealed class PredictionService
         Seed("PumpPower|Spike", ("Search:pump", 4), ("Command:Switch Booster Pump off", 3));
         Seed("SoilMoisture|ThresholdBreach", ("Search:pump", 3), ("Command:Switch Borehole Pump on", 2));
         Seed("SoilMoisture|Silence", ("Search:valve", 2));
-        Save();
+        await SaveAsync();
     }
 
     private void Seed(string context, params (string FollowUp, int Count)[] habits)
         => _pairs[context] = new(habits.ToDictionary(h => h.FollowUp, h => h.Count), StringComparer.OrdinalIgnoreCase);
 
-    // Written under the lock, to a temp file then moved over, so a crash mid-write cannot leave half a file.
+    // Written holding the gate, to a temp file then moved over, so a crash mid-write cannot leave half a file.
     // Reference [55]: Microsoft. File.Move Method. Microsoft Learn.
     //   https://learn.microsoft.com/dotnet/api/system.io.file.move
-    private void Save()
+    // Reference [56]: Microsoft. File.WriteAllTextAsync Method. Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/api/system.io.file.writealltextasync
+    private async Task SaveAsync()
     {
         if (_path is null) return;
 
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
-            File.WriteAllText(_path + ".tmp", JsonSerializer.Serialize(_pairs));
+            await File.WriteAllTextAsync(_path + ".tmp", JsonSerializer.Serialize(_pairs));
             File.Move(_path + ".tmp", _path, overwrite: true);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
@@ -128,25 +166,22 @@ public sealed class PredictionService
     }
 
     /// <summary>Logged actions, newest first.</summary>
-    public IReadOnlyList<OperatorAction> Log
+    public async Task<IReadOnlyList<OperatorAction>> LogAsync(CancellationToken ct = default)
     {
-        get { lock (_gate) return _log.Reverse().ToList(); }
+        using (await EnterAsync(ct)) return _log.Reverse().ToList();
     }
 
     /// <summary>Every event seen so far with its follow-ups ranked, for inspecting what has been learned.</summary>
-    public IReadOnlyDictionary<string, IReadOnlyList<RankedFollowUp>> Pairs
+    public async Task<IReadOnlyDictionary<string, IReadOnlyList<RankedFollowUp>>> PairsAsync(CancellationToken ct = default)
     {
-        get
-        {
-            lock (_gate)
-                return _pairs.Keys.Order().ToDictionary(x => x, x => RankLocked(x, int.MaxValue));
-        }
+        using (await EnterAsync(ct))
+            return _pairs.Keys.Order().ToDictionary(x => x, x => RankLocked(x, int.MaxValue));
     }
 
     /// <summary>The <paramref name="top"/> follow-ups to event X, most frequent first. Empty for an event never seen.</summary>
-    public IReadOnlyList<RankedFollowUp> Rank(string context, int top = 3)
+    public async Task<IReadOnlyList<RankedFollowUp>> RankAsync(string context, int top = 3, CancellationToken ct = default)
     {
-        lock (_gate) return RankLocked(context, top);
+        using (await EnterAsync(ct)) return RankLocked(context, top);
     }
 
     // Ties go to the follow-up's name so the order is stable between calls.
@@ -156,15 +191,18 @@ public sealed class PredictionService
                  .Take(top).Select(p => new RankedFollowUp(p.Key, p.Value)).ToList()
             : [];
     //----------------------------------------------------------------------------------------------------------------------//
-    /// <summary>Logs one action against every fault that is open right now.</summary>
-    public OperatorAction Record(OperatorActionKind kind, string target)
+    /// <summary>
+    /// Logs one action against every fault that is open right now. Takes no cancellation
+    /// token: an operator action is still learned if the client hangs up on the response.
+    /// </summary>
+    public async Task<OperatorAction> RecordAsync(OperatorActionKind kind, string target)
     {
         // "Pump" and "pump " are the same search; command labels are generated, so already stable.
         target = kind == OperatorActionKind.Search ? target.Trim().ToLowerInvariant() : target;
         var faults = OpenFaultKeys();
         var action = new OperatorAction(DateTimeOffset.UtcNow, kind, target, faults.Select(f => f.Context).Distinct().Order().ToList());
 
-        lock (_gate)
+        using (await EnterAsync())
         {
             _log.Enqueue(action);
             if (_log.Count > MaxLog) _log.Dequeue();
@@ -187,7 +225,7 @@ public sealed class PredictionService
                 counted = true;
             }
 
-            if (counted) Save();
+            if (counted) await SaveAsync();
         }
 
         return action;
@@ -197,46 +235,45 @@ public sealed class PredictionService
     /// Forgets everything learned and the action log, and clears the saved file: the engine
     /// starts cold, so the next suggestions come only from what the operator does from now on.
     /// </summary>
-    public void Reset()
+    public async Task ResetAsync()
     {
-        lock (_gate)
+        using (await EnterAsync())
         {
             _pairs.Clear();
             _log.Clear();
             _counted.Clear();
             _latest = null;
-            Save();
+            await SaveAsync();
         }
     }
     //----------------------------------------------------------------------------------------------------------------------//
     /// <summary>
     /// Event X has happened again: the follow-ups the operator has made a habit of after it,
     /// or null when there is nothing worth suggesting yet. The result is also kept as
-    /// <see cref="Current"/> so a dashboard that opens mid-alert still gets it.
+    /// <see cref="CurrentAsync"/> so a dashboard that opens mid-alert still gets it.
     /// </summary>
-    public Suggestion? Suggest(Alert alert)
+    public async Task<Suggestion?> SuggestAsync(Alert alert, CancellationToken ct = default)
     {
-        // A freshly raised alert is a new fault: whatever was counted for its last run no longer applies.
-        lock (_gate) _counted.RemoveWhere(c => c.StartsWith($"{alert.SensorId}|{alert.Kind}>>", StringComparison.OrdinalIgnoreCase));
+        using (await EnterAsync(ct))
+        {
+            // A freshly raised alert is a new fault: whatever was counted for its last run no longer applies.
+            _counted.RemoveWhere(c => c.StartsWith($"{alert.SensorId}|{alert.Kind}>>", StringComparison.OrdinalIgnoreCase));
 
-        if (!Actionable(alert) || !store.TryGet(alert.SensorId, out var sensor)) return null;
+            if (!Actionable(alert) || !store.TryGet(alert.SensorId, out var sensor)) return null;
 
-        var context = ContextKey(sensor, alert);
-        var habits = Rank(context).Where(f => f.Count >= MinOccurrences).ToList();
-        if (habits.Count == 0) return null;
+            var context = ContextKey(sensor, alert);
+            var habits = RankLocked(context, 3).Where(f => f.Count >= MinOccurrences).ToList();
+            if (habits.Count == 0) return null;
 
-        var suggestion = new Suggestion(alert.Id, context, sensor.DisplayName, alert.RaisedAt, habits);
-        lock (_gate) _latest = suggestion;
-        return suggestion;
+            return _latest = new Suggestion(alert.Id, context, sensor.DisplayName, alert.RaisedAt, habits);
+        }
     }
 
     /// <summary>The last suggestion made, while its alert is still recent enough to be driving the operator.</summary>
-    public Suggestion? Current
+    public async Task<Suggestion?> CurrentAsync(CancellationToken ct = default)
     {
-        get
-        {
-            lock (_gate) return _latest is { } s && s.RaisedAt >= DateTimeOffset.UtcNow - SuggestionLifetime ? s : null;
-        }
+        using (await EnterAsync(ct))
+            return _latest is { } s && s.RaisedAt >= DateTimeOffset.UtcNow - SuggestionLifetime ? s : null;
     }
     //----------------------------------------------------------------------------------------------------------------------//
     /// <summary>
@@ -284,14 +321,14 @@ public sealed class PredictionService
     /// <summary>
     /// Every event that has a habit attached (done at least <see cref="MinOccurrences"/> times),
     /// the ones with a fault open right now first, each with its follow-ups ranked. Unlike
-    /// <see cref="Current"/> this is not one alert deep or on a timer: it is what the engine
+    /// <see cref="CurrentAsync"/> this is not one alert deep or on a timer: it is what the engine
     /// would suggest for every alert it has learned, so the panel is never empty.
     /// </summary>
-    public IReadOnlyList<Insight> Insights()
+    public async Task<IReadOnlyList<Insight>> InsightsAsync(CancellationToken ct = default)
     {
         var open = OpenFaults();
 
-        lock (_gate)
+        using (await EnterAsync(ct))
             return _pairs.Keys
                 .Select(context => (context, habits: RankLocked(context, 3).Where(f => f.Count >= MinOccurrences).ToList()))
                 .Where(x => x.habits.Count > 0)
@@ -332,13 +369,21 @@ public sealed class PredictionService
     //   https://en.wikipedia.org/wiki/Simple_linear_regression
     // Reference [38]: Wikipedia. Coefficient of determination.
     //   https://en.wikipedia.org/wiki/Coefficient_of_determination
-    public IReadOnlyList<TrendFlag> TrendFlags()
+    // Fitting a line per device is CPU work with nothing to await, so it runs on the thread pool.
+    // Reference [57]: Microsoft. Task.Run Method. Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/api/system.threading.tasks.task.run
+    public Task<IReadOnlyList<TrendFlag>> TrendFlagsAsync(CancellationToken ct = default)
+        => Task.Run(() => FindTrends(ct), ct);
+
+    private IReadOnlyList<TrendFlag> FindTrends(CancellationToken ct)
     {
         var silent = anomalies.Disconnected.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var flags = new List<TrendFlag>();
 
         foreach (var sensor in store.Sensors)
         {
+            ct.ThrowIfCancellationRequested();
+
             // Valves and vents report a state, not a level; a silent node's window is stale.
             if (sensor.Payload == PayloadKind.Boolean || silent.Contains(sensor.Id)) continue;
 
