@@ -513,6 +513,13 @@ Recording an action is two hash lookups and an increment. Ranking an event's fol
 sorts only that event's row - the handful of things operators do in response to it - most
 frequent first, ties broken by name so the order is stable.
 
+The engine runs asynchronously. `RecordAsync`, `SuggestAsync`, `RankAsync`, `InsightsAsync`
+and the rest are awaited all the way from the endpoint or ingest worker. The counters sit
+behind a `SemaphoreSlim` taken with `WaitAsync` instead of a `lock`, because the holder
+awaits the write to `storage/predictions.json`; anything queued behind it waits without
+holding a thread. Fitting trend lines is CPU work with nothing to await, so
+`TrendFlagsAsync` runs it on the thread pool.
+
 The context is the set of faults *still open*, read from the disconnect set and the open
 error states described above, not "the newest alert". On a busy mesh a one-reading spike
 elsewhere lands seconds after the moisture alert and closes again at once, while the
@@ -854,3 +861,5 @@ References follow the IEEE style. Numbers match the `// Reference [N]` comments 
 [53] Microsoft, "PriorityQueue&lt;TElement,TPriority&gt; Class," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/api/system.collections.generic.priorityqueue-2  
 [54] Microsoft, "SortedDictionary&lt;TKey,TValue&gt; Class," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/api/system.collections.generic.sorteddictionary-2  
 [55] Microsoft, "File.Move Method," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/api/system.io.file.move  
+[56] Microsoft, "File.WriteAllTextAsync Method," Microsoft Learn. Accessed: Nov. 2, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/api/system.io.file.writealltextasync  
+[57] Microsoft, "Task.Run Method," Microsoft Learn. Accessed: Nov. 2, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/api/system.threading.tasks.task.run  

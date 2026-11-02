@@ -119,7 +119,7 @@ public sealed class MeshSimulator(
                     {
                         await hub.Clients.All.SendAsync(HubEvents.AlertRaised, alert, stoppingToken);
 
-                        if (predictions.Suggest(alert) is { } suggestion)
+                        if (await predictions.SuggestAsync(alert, stoppingToken) is { } suggestion)
                             await hub.Clients.All.SendAsync(HubEvents.SuggestionReady, suggestion, stoppingToken);
                     }
                 }
