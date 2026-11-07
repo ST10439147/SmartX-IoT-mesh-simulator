@@ -163,7 +163,6 @@ footer.foot {
     border: 1px solid transparent;
     transition: background .15s, color .15s, border-color .15s;
 }
-.nav-locked { padding: .4rem .8rem; color: var(--dim); font-size: .9rem; opacity: .5; cursor: not-allowed; }
 .nav a:hover { color: var(--text); background: var(--panel-2); }
 .nav a.active { color: var(--text); background: var(--panel-2); border-color: var(--line); }
 
@@ -238,15 +237,11 @@ footer.foot {
 }
 .pillar:hover { transform: translateY(-3px); border-color: var(--line-strong); }
 
-.pillar.locked { opacity: .5; cursor: not-allowed; }
-.pillar.locked::before { background: var(--line); }
-.pillar.locked:hover { transform: none; border-color: var(--line); }
 
 .pillar .step { font-family: var(--mono); font-size: .72rem; color: var(--dim); letter-spacing: .12em; text-transform: uppercase; }
 .pillar h3 { margin: .5rem 0 .35rem; font-size: 1.1rem; }
 .pillar p { font-size: .88rem; margin-bottom: 1rem; }
 .pillar .cta { margin-top: auto; font-size: .85rem; font-weight: 600; color: var(--accent); }
-.pillar.locked .cta { color: var(--dim); }
 
 /* ---------------------------------------------------------------- stats */
 
