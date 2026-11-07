@@ -239,6 +239,22 @@ public sealed class GatewayClient(HttpClient http)
         }
     }
 
+    /// <summary>Every reading between two times, from the sensor's AVL history tree. Null if the gateway could not be reached or the sensor is gone.</summary>
+    public async Task<HistoryRange?> GetHistoryRangeAsync(string sensorId, DateTimeOffset from, DateTimeOffset to, CancellationToken ct = default)
+    {
+        try
+        {
+            return await http.GetFromJsonAsync<HistoryRange>(
+                $"api/sensors/{Uri.EscapeDataString(sensorId)}/history/range" +
+                $"?from={Uri.EscapeDataString(from.ToString("O"))}&to={Uri.EscapeDataString(to.ToString("O"))}",
+                SmartXJson.Options, ct);
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+    }
+
     /// <summary>Test trigger: has the gateway receive a few backdated readings for this sensor in shuffled order.</summary>
     public async Task ScrambleTimelineAsync(string sensorId, CancellationToken ct = default)
         => await http.PostAsync($"api/sensors/{Uri.EscapeDataString(sensorId)}/timeline/scramble", null, ct);

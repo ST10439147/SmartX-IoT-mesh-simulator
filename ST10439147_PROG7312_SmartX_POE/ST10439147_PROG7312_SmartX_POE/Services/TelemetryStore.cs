@@ -56,6 +56,15 @@ public sealed class TelemetryStore
     //   https://learn.microsoft.com/dotnet/api/system.collections.generic.sorteddictionary-2
     private readonly ConcurrentDictionary<string, SortedDictionary<(DateTimeOffset At, long Sequence), TimelinePoint>> _timelines = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>Readings kept in each sensor's long-term history tree: a day at a 2s interval.</summary>
+    public const int HistoryCapacity = 50_000;
+
+    // The long-term history: one AVL tree per sensor, same (timestamp, sequence) key as the
+    // timeline. The timeline is the short, recent window the dashboard graphs; the tree holds
+    // the whole day and answers "readings between 14:00 and 16:00" without a scan.
+    // Locked per sensor for the same reason as the timeline.
+    private readonly ConcurrentDictionary<string, AvlTree<(DateTimeOffset At, long Sequence), TimelinePoint>> _history = new(StringComparer.OrdinalIgnoreCase);
+
     private long _packetsIngested;
     private long _lookups;
     private long _misses;
@@ -120,6 +129,7 @@ public sealed class TelemetryStore
 
         _attachments.TryAdd(sensor.Id, []);
         _timelines.TryAdd(sensor.Id, []);
+        _history.TryAdd(sensor.Id, new());
         return sensor;
     }
     //----------------------------------------------------------------------------------------------------------------------//
@@ -133,6 +143,7 @@ public sealed class TelemetryStore
         _attachments.TryRemove(id, out _);
         _lastSeen.TryRemove(id, out _);
         _timelines.TryRemove(id, out _);
+        _history.TryRemove(id, out _);
         return _sensors.TryRemove(id, out _);
     }
 
@@ -176,12 +187,31 @@ public sealed class TelemetryStore
     {
         if (!_timelines.TryGetValue(sensorId, out var log)) return;
 
+        var point = new TimelinePoint(at, value, sequence);
         lock (log)
         {
-            log[(at, sequence)] = new TimelinePoint(at, value, sequence);
+            log[(at, sequence)] = point;
 
             // Bounded like the ring buffers. The first key is always the oldest reading.
             if (log.Count > TimelineCapacity) log.Remove(log.Keys.First());
+        }
+
+        LogHistory(sensorId, point);
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    /// <summary>
+    /// Files a reading in the sensor's AVL history tree only. The live path reaches this
+    /// through <see cref="LogReading"/>; the simulator calls it directly to seed a day of
+    /// history at boot. O(log n) per insert, and dropping the oldest is O(log n) too.
+    /// </summary>
+    public void LogHistory(string sensorId, TimelinePoint point)
+    {
+        if (!_history.TryGetValue(sensorId, out var tree)) return;
+
+        lock (tree)
+        {
+            tree.Add((point.At, point.Sequence), point);
+            if (tree.Count > HistoryCapacity) tree.TryRemoveMin(out _, out _);
         }
     }
     //----------------------------------------------------------------------------------------------------------------------//
@@ -215,6 +245,22 @@ public sealed class TelemetryStore
     {
         if (!_timelines.TryGetValue(sensorId, out var log)) return [];
         lock (log) return log.Values.Skip(Math.Max(0, log.Count - Math.Max(1, samples))).ToList();
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    /// <summary>
+    /// Every reading taken between <paramref name="from"/> and <paramref name="to"/>
+    /// (inclusive), oldest first, from the sensor's AVL tree. Null if the sensor is unknown.
+    /// </summary>
+    // Sequence spans long.MinValue..MaxValue so every reading at the boundary timestamps is included.
+    public HistoryRange? QueryHistory(string sensorId, DateTimeOffset from, DateTimeOffset to)
+    {
+        if (!_history.TryGetValue(sensorId, out var tree)) return null;
+
+        lock (tree)
+        {
+            var points = tree.Range((from, long.MinValue), (to, long.MaxValue), out var visited);
+            return new HistoryRange(sensorId, from, to, points, tree.Count, tree.Height, visited);
+        }
     }
     //----------------------------------------------------------------------------------------------------------------------//
 

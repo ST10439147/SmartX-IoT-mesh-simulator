@@ -71,6 +71,7 @@ public sealed class MeshSimulator(
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         SeedMesh();
+        BackfillHistory(TimeSpan.FromHours(24));
 
         // Hosted services start before Kestrel is listening, so there is nothing to post
         // to yet. Wait for the server, then aim at whichever port it actually bound.
@@ -264,6 +265,45 @@ public sealed class MeshSimulator(
         Add("B8:27:EB:41:02:AD", "Rainwater Tank Level", "Facility A/Zone 2/Roof Array", SensorCategory.TankLevel, 5, 74, 2);
     }
 
+    //----------------------------------------------------------------------------------------------------------------------//
+    /// <summary>
+    /// Seeds <paramref name="span"/> of history into every seeded node's AVL tree, ending
+    /// where the warmup begins, so a range query like "14:00 to 16:00" has data from the
+    /// first request (~416k readings across the seeded mesh, roughly 50 MB in memory).
+    /// </summary>
+    // Written straight into the store rather than posted: ~400k HTTP calls
+    // would hold boot up for minutes, and the live path already proves the API route.
+    // Sequence 0 marks a seeded reading; live readings always carry a sequence of 1 or more.
+    private void BackfillHistory(TimeSpan span)
+    {
+        var end = DateTimeOffset.UtcNow.AddSeconds(-WarmupTicks);
+        var seeded = 0;
+
+        foreach (var sensor in store.Sensors)
+        {
+            var node = _state[sensor.Id];
+            var step = TimeSpan.FromSeconds(sensor.PublishIntervalSeconds);
+
+            for (var at = end - span; at < end; at += step)
+            {
+                var spiking = _random.NextDouble() < 0.012;
+                double value;
+
+                if (sensor.Payload == PayloadKind.Boolean)
+                {
+                    if (_random.NextDouble() < 0.08) node.Flag = !node.Flag;
+                    value = node.Flag ? 1 : 0;
+                }
+                else if (sensor.Payload == PayloadKind.Integer) value = Math.Round(node.NextFloat(_random, spiking));
+                else value = node.NextFloat(_random, spiking);
+
+                store.LogHistory(sensor.Id, new TimelinePoint(at, value, 0));
+                seeded++;
+            }
+        }
+
+        logger.LogInformation("Backfilled {Count:N0} readings ({Hours}h) into the AVL history trees", seeded, span.TotalHours);
+    }
     //----------------------------------------------------------------------------------------------------------------------//
 
     /// <summary>
