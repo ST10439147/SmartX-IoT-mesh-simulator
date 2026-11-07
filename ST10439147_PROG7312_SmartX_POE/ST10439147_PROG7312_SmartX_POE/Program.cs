@@ -342,6 +342,24 @@ api.MapGet("/sensors/{id}/history", (string id, TelemetryStore store, [FromQuery
     };
 });
 
+// A time-range query against the sensor's AVL history tree, e.g.
+// GET /api/sensors/A4:CF:12:9B:04:7E/history/range?from=2026-11-07T14:00:00Z&to=2026-11-07T16:00:00Z
+// Both bounds are optional: `to` defaults to now and `from` to an hour before `to`.
+// The response carries the tree's size, height and the nodes the query touched, so the
+// pruning is visible rather than claimed.
+// ponytail: returns every point in range (a full day is ~43k for a 2s sensor). Downsample
+// server-side if the topology page ever has to chart whole days.
+api.MapGet("/sensors/{id}/history/range", (string id, TelemetryStore store, [FromQuery] DateTimeOffset? from, [FromQuery] DateTimeOffset? to) =>
+{
+    if (!store.TryGet(id, out var sensor)) return Results.NotFound();
+
+    var end = to ?? DateTimeOffset.UtcNow;
+    var start = from ?? end.AddHours(-1);
+    if (start > end) return Results.BadRequest(new { error = "`from` must not be after `to`." });
+
+    return Results.Ok(store.QueryHistory(sensor.Id, start, end));
+});
+
 // The sensor's log in timestamp order, straight out of its SortedDictionary. `sequence`
 // is the order each reading arrived in; where it runs backwards, a packet arrived late.
 api.MapGet("/sensors/{id}/timeline", (string id, TelemetryStore store, [FromQuery] int samples = 60) =>

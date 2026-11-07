@@ -29,8 +29,61 @@ public static class SelfCheck
         RecursiveValidationDetectsCycles(log);
         PacketSurvivesJsonRoundTrip(log);
         EverySensorIsASpecificAgriculturalDevice(log);
+        AvlTreeStaysBalancedAndAnswersRanges(log);
 
         return log;
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    // Reference: Wikipedia. AVL tree. https://en.wikipedia.org/wiki/AVL_tree
+    private static void AvlTreeStaysBalancedAndAnswersRanges(List<string> log)
+    {
+        // Sorted keys are the worst case: a plain BST would end up 10,000 deep.
+        var tree = new AvlTree<int, int>();
+        for (var i = 0; i < 10_000; i++) tree.Add(i, i);
+
+        Assert(tree.Count == 10_000, "every insert should be counted");
+        Assert(tree.IsValid(), "sorted inserts should leave a valid, balanced AVL tree");
+        Assert(tree.Height <= 20, $"10,000 sorted keys should sit at most ~1.44 log2(n) deep, got {tree.Height}");
+
+        // Range answers match a brute-force scan, and touch far fewer nodes than n.
+        var hits = tree.Range(4_000, 4_099, out var visited);
+        Assert(hits.SequenceEqual(Enumerable.Range(4_000, 100)), "range should return exactly 4000..4099 in order");
+        Assert(visited < 300, $"a 100-key range should visit O(log n + k) nodes, visited {visited}");
+        Assert(tree.Range(20_000, 30_000, out _).Count == 0, "a range past the data should be empty");
+        Assert(tree.Range(5, 1, out _).Count == 0, "a reversed range should be empty");
+
+        // Random order, duplicates replace rather than add.
+        var random = new Random(7312);
+        var shuffled = new AvlTree<int, int>();
+        var reference = new SortedDictionary<int, int>();
+        for (var i = 0; i < 5_000; i++)
+        {
+            var key = random.Next(0, 3_000);
+            shuffled.Add(key, i);
+            reference[key] = i;
+        }
+
+        Assert(shuffled.Count == reference.Count, "a repeated key should replace, not add");
+        Assert(shuffled.IsValid(), "random inserts should leave a valid AVL tree");
+        Assert(shuffled.Range(500, 1_500, out _).SequenceEqual(reference.Where(p => p.Key is >= 500 and <= 1_500).Select(p => p.Value)),
+            "range over random keys should match a sorted scan");
+
+        // Dropping the oldest keeps it balanced and gives back the minimum each time.
+        for (var i = 0; i < 9_000; i++)
+            Assert(tree.TryRemoveMin(out var key, out _) && key == i, "remove-min should return keys in ascending order");
+
+        Assert(tree.Count == 1_000 && tree.IsValid(), "the tree should stay balanced while the oldest are dropped");
+
+        // Timestamp keys, the way the store uses them: same instant, different sequence, both kept.
+        var at = DateTimeOffset.UnixEpoch;
+        var history = new AvlTree<(DateTimeOffset, long), double>();
+        history.Add((at, 1), 1);
+        history.Add((at, 2), 2);
+        history.Add((at.AddHours(3), 3), 3);
+        Assert(history.Range((at, long.MinValue), (at.AddHours(2), long.MaxValue), out _).SequenceEqual([1d, 2d]),
+            "a time window should include every reading at its boundary timestamp and nothing past it");
+
+        log.Add("avl tree: balanced under sorted inserts, range queries prune, remove-min keeps it balanced");
     }
     //----------------------------------------------------------------------------------------------------------------------//
     // Reference [12]: Wikipedia. Circular buffer.
