@@ -5,6 +5,7 @@ using SmartX.Api.Security;
 using SmartX.Api.Services;
 using SmartX.Shared.Diagnostics;
 using SmartX.Shared.Telemetry;
+using SmartX.Shared.Topology;
 
 namespace SmartX.Api;
 
@@ -39,6 +40,9 @@ internal static class SelfCheckRunner
                 Console.WriteLine($"  ok  {line}");
 
             foreach (var line in RunTimelineChecks())
+                Console.WriteLine($"  ok  {line}");
+
+            foreach (var line in RunMeshChecks())
                 Console.WriteLine($"  ok  {line}");
 
             foreach (var line in RunDisconnectChecks())
@@ -325,6 +329,49 @@ internal static class SelfCheckRunner
         Assert(store.LastSeen(probe.Id) == start.AddMinutes(5), "a late packet must not move last-seen backwards");
 
         log.Add("sorted dictionary: out-of-order packets read back in time order, the log stays bounded");
+        return log;
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    private static IEnumerable<string> RunMeshChecks()
+    {
+        var log = new List<string>();
+        var store = new TelemetryStore();
+        var mesh = new MeshNetwork(store);
+
+        SensorRegistration Register(string mac, string path) => store.Register(new SensorRegistration
+        {
+            MacAddress = mac, DisplayName = mac, DeploymentPath = path, Category = SensorCategory.SoilMoisture
+        });
+
+        // Reported links are taken as given, by MAC in any spelling.
+        var north = Register("A4:CF:12:9B:04:7E", "Facility A/Zone 1/Sub-Zone A");
+        mesh.Link(MeshGraph.GatewayId, "a4-cf-12-9b-04-7e", -55);
+
+        var view = mesh.View();
+        Assert(view.Vertices[0].IsGateway, "the gateway should be listed first");
+        Assert(view.Links.Single().RssiDbm == -55, "a reported link should keep its RSSI");
+
+        // A node registered with no reported links is linked to what is near it.
+        var south = Register("A4:CF:12:9B:04:7F", "Facility A/Zone 1/Sub-Zone A");   // same sub-zone as north
+        var vent = Register("DC:A6:32:77:11:02", "Facility A/Zone 1/Sub-Zone B");    // same zone, other sub-zone
+        var tank = Register("B8:27:EB:41:02:AD", "Facility B/Roof");                 // nothing nearby
+
+        view = mesh.View();
+        bool Linked(string a, string b, int rssi) =>
+            view.Links.Any(l => l.RssiDbm == rssi && ((l.From == a && l.To == b) || (l.From == b && l.To == a)));
+
+        Assert(Linked(south.Id, north.Id, -60), "a node should link to a neighbour in its own sub-zone");
+        Assert(Linked(vent.Id, north.Id, -70) && Linked(vent.Id, south.Id, -70), "with no sub-zone neighbour it should link to two in its zone");
+        Assert(Linked(tank.Id, MeshGraph.GatewayId, -75), "with nothing nearby it should fall back to the gateway");
+        Assert(view.Vertices.All(v => v.Degree > 0), "no registered node should be an island");
+
+        // Deleting a node takes its links with it.
+        store.Remove(south.Id);
+        view = mesh.View();
+        Assert(view.Vertices.All(v => v.Id != south.Id), "a deleted node should leave the graph");
+        Assert(view.Links.All(l => l.From != south.Id && l.To != south.Id), "a deleted node's links should go with it");
+
+        log.Add("mesh network: reported links kept, unreported nodes auto-linked by location, deletes leave no dangling links");
         return log;
     }
     //----------------------------------------------------------------------------------------------------------------------//

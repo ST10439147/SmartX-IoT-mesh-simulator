@@ -1,0 +1,121 @@
+namespace SmartX.Shared.Topology;
+
+/// <summary>
+/// One wireless link between two mesh nodes. <see cref="RssiDbm"/> is the received signal
+/// strength - closer to zero is stronger. <see cref="Cost"/> is the weight routing works
+/// with: the relative transmit energy needed to get one packet across this link.
+/// </summary>
+public sealed record MeshLink(string From, string To, int RssiDbm, double Cost);
+
+/// <summary>
+/// The physical IoT mesh as an undirected, weighted graph. Each vertex is an ESP32 node
+/// (keyed by its canonical MAC) or the central gateway; each edge is a radio link the two
+/// ends can hear each other over.
+///
+/// <para><b>Adjacency list, not a matrix.</b> A mesh node only hears a handful of
+/// neighbours, so the graph is sparse: V nodes but only a few links each. A V x V matrix
+/// would store mostly "no link" and cost O(V) to list one node's neighbours. The adjacency
+/// list stores only real links - O(V + E) memory - and hands back a node's neighbours
+/// directly, which is the one operation BFS, DFS and Prim's all repeat.</para>
+///
+/// <para><b>Undirected.</b> Radio links work both ways, so <see cref="Connect"/> files the
+/// link under both ends. Each end's list holds the link pointing away from it, so
+/// <c>link.To</c> is always "the neighbour".</para>
+///
+/// <para>Not thread-safe: the owning service locks around it.</para>
+/// </summary>
+// Reference: Cormen, T. H. et al. (2022). Introduction to Algorithms, 4th ed., ch. 20 "Elementary Graph Algorithms". MIT Press.
+// Reference: Espressif. ESP-WIFI-MESH Programming Guide. https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-guides/esp-wifi-mesh.html
+public sealed class MeshGraph
+{
+    /// <summary>The vertex id of the central gateway every route ends at.</summary>
+    public const string GatewayId = "GATEWAY";
+
+    // RSSI of a reference link that costs exactly 1.0; see CostOf.
+    private const int ReferenceRssi = -50;
+
+    private readonly Dictionary<string, List<MeshLink>> _adjacency = new(StringComparer.OrdinalIgnoreCase);
+
+    public int VertexCount => _adjacency.Count;
+
+    /// <summary>Undirected links, each counted once.</summary>
+    public int LinkCount { get; private set; }
+
+    public IReadOnlyCollection<string> Vertices => _adjacency.Keys;
+
+    public bool Contains(string id) => _adjacency.ContainsKey(id);
+
+    /// <summary>Adds an isolated vertex. False if it was already there.</summary>
+    public bool AddVertex(string id) => _adjacency.TryAdd(id, []);
+
+    /// <summary>
+    /// Links two nodes, adding either vertex if it is new. Linking an existing pair again
+    /// updates the signal reading rather than adding a parallel edge. O(degree).
+    /// </summary>
+    public void Connect(string a, string b, int rssiDbm)
+    {
+        if (string.Equals(a, b, StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException($"A node cannot link to itself ({a}).");
+
+        AddVertex(a);
+        AddVertex(b);
+
+        var cost = CostOf(rssiDbm);
+        var added = Upsert(_adjacency[a], new MeshLink(a, b, rssiDbm, cost));
+        Upsert(_adjacency[b], new MeshLink(b, a, rssiDbm, cost));
+        if (added) LinkCount++;
+    }
+
+    // Replaces the link to the same neighbour if there is one. True if it was new.
+    private static bool Upsert(List<MeshLink> links, MeshLink link)
+    {
+        var index = links.FindIndex(l => string.Equals(l.To, link.To, StringComparison.OrdinalIgnoreCase));
+        if (index >= 0)
+        {
+            links[index] = link;
+            return false;
+        }
+
+        links.Add(link);
+        return true;
+    }
+
+    /// <summary>Removes a vertex and every link touching it, from both ends. O(degree of its neighbours).</summary>
+    public bool RemoveVertex(string id)
+    {
+        if (!_adjacency.Remove(id, out var links)) return false;
+
+        foreach (var link in links)
+            _adjacency[link.To].RemoveAll(l => string.Equals(l.To, id, StringComparison.OrdinalIgnoreCase));
+
+        LinkCount -= links.Count;
+        return true;
+    }
+
+    /// <summary>The links leaving <paramref name="id"/>; <c>To</c> on each is the neighbour. Empty if unknown.</summary>
+    public IReadOnlyList<MeshLink> Neighbours(string id)
+        => _adjacency.TryGetValue(id, out var links) ? links : [];
+
+    public int DegreeOf(string id) => Neighbours(id).Count;
+
+    /// <summary>Every link once, not once per end.</summary>
+    public IEnumerable<MeshLink> Links
+        => _adjacency.Values.SelectMany(l => l).Where(l => string.Compare(l.From, l.To, StringComparison.OrdinalIgnoreCase) < 0);
+
+    /// <summary>
+    /// Relative transmit energy for one packet over a link with this RSSI. dBm is a log
+    /// scale - every 10 dB weaker means ten times less power arrives - so the radio has to
+    /// put out ten times more to be heard reliably. A -50 dBm link costs 1.0, -60 costs 10,
+    /// -70 costs 100. Summing these along a route gives its total energy, which is what the
+    /// power-efficient routing in section 4 minimises.
+    /// </summary>
+    // Reference: Rappaport, T. S. (2002). Wireless Communications: Principles and Practice, 2nd ed., ch. 4 "Path loss". Prentice Hall.
+    public static double CostOf(int rssiDbm) => Math.Round(Math.Pow(10, (ReferenceRssi - rssiDbm) / 10.0), 2);
+}
+//----------------------------------------------------------------------------------------------------------------------//
+/// <summary>A vertex as the API shows it: the node plus what the dashboard needs to draw it.</summary>
+public sealed record MeshVertex(string Id, string Name, string DeploymentPath, bool IsGateway, int Degree);
+
+/// <summary>The whole mesh in one response: every vertex and every link once.</summary>
+public sealed record MeshView(IReadOnlyList<MeshVertex> Vertices, IReadOnlyList<MeshLink> Links);
+//---------------------------DDDDDDDDDDDoooooooooooooo END OF FILE DDDDDDDDDDDoooooooooooooo---------------------------//

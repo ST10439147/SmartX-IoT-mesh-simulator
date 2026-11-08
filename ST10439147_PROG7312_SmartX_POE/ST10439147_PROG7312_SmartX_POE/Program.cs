@@ -35,6 +35,7 @@ builder.Services.AddSingleton<AnomalyEngine>();
 builder.Services.AddSingleton<AttachmentService>();
 builder.Services.AddSingleton<IngestQueue>();
 builder.Services.AddSingleton<CommandService>();
+builder.Services.AddSingleton<MeshNetwork>();
 builder.Services.AddSingleton(services => new PredictionService(
     services.GetRequiredService<TelemetryStore>(), services.GetRequiredService<AnomalyEngine>(), "storage/predictions.json"));
 // Reference [23]: Microsoft. Background tasks with hosted services in ASP.NET Core. Microsoft Learn.
@@ -505,6 +506,10 @@ api.MapPost("/sensors/{id}/drift", (string id, TelemetryStore store, MeshSimulat
 // ---------------------------------------------------------------- topology (recursion)
 
 api.MapGet("/topology", (TelemetryStore store) => store.Topology);
+
+// The physical radio mesh as a graph: every vertex (ESP32 nodes + the gateway) and every
+// link once, with its RSSI and routing cost. This is the graph BFS and the MST run over.
+api.MapGet("/mesh", (MeshNetwork mesh) => mesh.View());
 
 api.MapPost("/topology/validate", (DeploymentNode root) => TopologyValidator.Validate(root));
 

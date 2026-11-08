@@ -47,6 +47,19 @@ public sealed class GatewayClient(HttpClient http)
 
     public async Task<DeploymentNode?> GetTopologyAsync(CancellationToken ct = default)
         => await http.GetFromJsonAsync<DeploymentNode>("api/topology", SmartXJson.Options, ct);
+
+    /// <summary>The radio mesh graph: every node and link. Null if the gateway could not be reached.</summary>
+    public async Task<MeshView?> GetMeshAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            return await http.GetFromJsonAsync<MeshView>("api/mesh", SmartXJson.Options, ct);
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+    }
 //----------------------------------------------------------------------------------------------------------------------//
     /// <summary>Registers a node. Field-level errors come straight back from the API's own validation.</summary>
     // Reference [17]: Microsoft. Handle errors in ASP.NET Core - problem details / ValidationProblem. Microsoft Learn.

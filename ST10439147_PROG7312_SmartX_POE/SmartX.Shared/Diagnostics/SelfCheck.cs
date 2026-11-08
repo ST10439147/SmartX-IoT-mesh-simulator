@@ -30,8 +30,48 @@ public static class SelfCheck
         PacketSurvivesJsonRoundTrip(log);
         EverySensorIsASpecificAgriculturalDevice(log);
         AvlTreeStaysBalancedAndAnswersRanges(log);
+        MeshGraphIsUndirectedAndWeighted(log);
 
         return log;
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    private static void MeshGraphIsUndirectedAndWeighted(List<string> log)
+    {
+        var graph = new MeshGraph();
+        graph.Connect(MeshGraph.GatewayId, "A", -50);
+        graph.Connect("A", "B", -60);
+        graph.Connect("B", "C", -70);
+        graph.Connect("A", "C", -55);
+
+        Assert(graph.VertexCount == 4 && graph.LinkCount == 4, $"expected 4 vertices and 4 links, got {graph.VertexCount} and {graph.LinkCount}");
+        Assert(graph.Links.Count() == 4, "Links should list each undirected link once");
+
+        // Undirected: the link is filed under both ends, pointing away from each.
+        Assert(graph.Neighbours("A").Any(l => l.To == "B") && graph.Neighbours("B").Any(l => l.To == "A"), "a link should be visible from both ends");
+        Assert(graph.Neighbours("A").All(l => l.From == "A"), "each end's list should hold links leaving that end");
+        Assert(graph.DegreeOf("A") == 3, "A hears the gateway, B and C");
+
+        // Reconnecting a pair updates the reading instead of adding a parallel edge.
+        graph.Connect("B", "A", -65);
+        Assert(graph.LinkCount == 4 && graph.DegreeOf("A") == 3, "relinking a pair should not add a second edge");
+        Assert(graph.Neighbours("A").Single(l => l.To == "B").RssiDbm == -65, "relinking should update the RSSI on both ends");
+
+        // Cost: every 10 dB weaker is ten times the energy.
+        Assert(MeshGraph.CostOf(-50) == 1 && MeshGraph.CostOf(-60) == 10 && MeshGraph.CostOf(-70) == 100,
+            "cost should be 1, 10, 100 at -50, -60, -70 dBm");
+
+        // Removing a node drops every link that touched it, from the other ends too.
+        Assert(graph.RemoveVertex("A"), "removing a known vertex should succeed");
+        Assert(graph.VertexCount == 3 && graph.LinkCount == 1, $"only B-C should be left, got {graph.LinkCount} links");
+        Assert(graph.DegreeOf(MeshGraph.GatewayId) == 0 && graph.Neighbours("B").All(l => l.To != "A"), "no neighbour may still point at a removed node");
+        Assert(!graph.RemoveVertex("A"), "removing it twice should report false");
+
+        var threw = false;
+        try { graph.Connect("B", "b", -40); }
+        catch (ArgumentException) { threw = true; }
+        Assert(threw, "a node linking to itself (in any letter case) should be rejected");
+
+        log.Add("mesh graph: undirected adjacency list, no parallel edges, removal cleans both ends, cost x10 per 10 dB");
     }
     //----------------------------------------------------------------------------------------------------------------------//
     // Reference: Wikipedia. AVL tree. https://en.wikipedia.org/wiki/AVL_tree
