@@ -66,6 +66,7 @@ public sealed class MeshNetwork(TelemetryStore store)
         var sensors = store.Sensors;
         var byId = sensors.ToDictionary(s => s.Id, StringComparer.OrdinalIgnoreCase);
         from = TelemetryStore.KeyFor(from);
+        down = IgnoringCase(down);
 
         lock (_gate)
         {
@@ -96,10 +97,80 @@ public sealed class MeshNetwork(TelemetryStore store)
         }
     }
     //----------------------------------------------------------------------------------------------------------------------//
+    /// <summary>
+    /// Traces one node's route to the gateway by MAC or id, and what an outage has done to it.
+    /// Null if the node is not on the mesh (or is the gateway itself).
+    ///
+    /// <para>Two BFS runs from the gateway: one over the healthy mesh gives the
+    /// <b>usual</b> route, one with the down nodes taken out gives the <b>current</b> route.
+    /// If the usual route runs through a down node and a current route still exists, the
+    /// mesh has healed around the failure and <see cref="RouteReport.NextHop"/> says
+    /// where the node should now send its packets. If no current route exists, the node is
+    /// stranded, and one more BFS per down node finds which repairs would reconnect it.</para>
+    /// </summary>
+    // ponytail: fewest hops, not least energy. The power-efficient (MST) routing in
+    // section 4 swaps the BFS tree for a minimum spanning tree.
+    public RouteReport? Route(string macOrId, IReadOnlySet<string> down)
+    {
+        var sensors = store.Sensors;
+        var byId = sensors.ToDictionary(s => s.Id, StringComparer.OrdinalIgnoreCase);
+        var id = TelemetryStore.KeyFor(macOrId);
+        down = IgnoringCase(down);
+
+        lock (_gate)
+        {
+            Sync(sensors);
+            if (!_graph.Contains(id) || id == MeshGraph.GatewayId) return null;
+
+            var node = VertexFor(id, byId);
+            var usual = RouteOf(_graph.BreadthFirst(MeshGraph.GatewayId), id, byId);
+            var failed = usual?.Hops.Where(h => down.Contains(h.Id) && h.Id != id).ToList() ?? [];
+
+            if (down.Contains(id))
+                return new RouteReport(node, RouteStatus.Down, usual, null, failed, null, []);
+
+            var current = RouteOf(_graph.BreadthFirst(MeshGraph.GatewayId, down), id, byId);
+
+            if (current is null)
+            {
+                // Try bringing each down node back on its own: any that reconnects this node
+                // on its own is a repair worth doing first.
+                var restoredBy = down
+                    .Where(_graph.Contains)
+                    .Where(d => _graph.BreadthFirst(MeshGraph.GatewayId, down.Where(o => o != d).ToHashSet()).Reached(id))
+                    .Select(d => VertexFor(d, byId))
+                    .OrderBy(v => v.Name)
+                    .ToList();
+
+                return new RouteReport(node, RouteStatus.Stranded, usual, null, failed, null, restoredBy);
+            }
+
+            var status = failed.Count > 0 ? RouteStatus.Rerouted : RouteStatus.Online;
+            return new RouteReport(node, status, usual, current, failed, current.Hops[1].Id, []);
+        }
+    }
+
+    // Turns a BFS tree's parent chain into hops plus the links between them. Caller holds _gate.
+    private MeshRoute? RouteOf(BfsTree tree, string id, IReadOnlyDictionary<string, SensorRegistration> byId)
+    {
+        var path = tree.PathFrom(id);
+        if (path is null) return null;
+
+        var links = path.Zip(path.Skip(1), (a, b) => _graph.LinkBetween(a, b)!).ToList();
+        return new MeshRoute(
+            path.Select(p => VertexFor(p, byId)).ToList(),
+            links,
+            Math.Round(links.Sum(l => l.Cost), 2));
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
     private MeshVertex VertexFor(string id, IReadOnlyDictionary<string, SensorRegistration> byId)
         => byId.TryGetValue(id, out var s)
             ? new MeshVertex(id, s.DisplayName, s.DeploymentPath, false, _graph.DegreeOf(id))
             : new MeshVertex(id, "Central gateway", GatewayPath, true, _graph.DegreeOf(id));
+
+    // Vertex ids ignore case, so a caller's down set must too, whatever comparer it was built with.
+    private static HashSet<string> IgnoringCase(IEnumerable<string> ids)
+        => ids.Select(TelemetryStore.KeyFor).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     // Gateway first, then nodes grouped by where they are deployed.
     private static IEnumerable<MeshVertex> Ordered(IEnumerable<MeshVertex> vertices)

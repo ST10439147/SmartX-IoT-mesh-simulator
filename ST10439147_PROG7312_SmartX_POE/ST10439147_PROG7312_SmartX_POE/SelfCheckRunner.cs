@@ -391,6 +391,48 @@ internal static class SelfCheckRunner
         Assert(mesh.Reachability("not-a-node", down) is null, "an unknown starting node should give no report");
 
         log.Add("mesh reachability: down and stranded nodes separated, subnet narrows the report not the search");
+
+        // Routes, on a fresh mesh:   GW - A - B - D      B has two ways home (A or C),
+        //                             \      /           D only has B.
+        //                               C --
+        store = new TelemetryStore();
+        mesh = new MeshNetwork(store);
+        var a = Register("02:00:00:00:00:0A", "Facility A/Zone 1/Sub-Zone A").Id;
+        var b = Register("02:00:00:00:00:0B", "Facility A/Zone 1/Sub-Zone A").Id;
+        var c = Register("02:00:00:00:00:0C", "Facility A/Zone 1/Sub-Zone A").Id;
+        var d = Register("02:00:00:00:00:0D", "Facility A/Zone 1/Sub-Zone A").Id;
+        mesh.Link(MeshGraph.GatewayId, a, -50);
+        mesh.Link(MeshGraph.GatewayId, c, -60);
+        mesh.Link(a, b, -50);
+        mesh.Link(c, b, -60);
+        mesh.Link(b, d, -55);
+
+        HashSet<string> Down(params string[] ids) => [.. ids];   // default comparer on purpose: Route must cope
+        IEnumerable<string> Ids(MeshRoute? r) => r!.Hops.Select(h => h.Id);
+
+        var healthy = mesh.Route(d.ToLowerInvariant(), Down())!;   // any MAC spelling
+        Assert(healthy.Status == RouteStatus.Online && healthy.NextHop == b, "a healthy node should be online and hand packets to B");
+        Assert(Ids(healthy.Current).SequenceEqual([d, b, a, MeshGraph.GatewayId]), "D's route should be D-B-A-gateway");
+        Assert(healthy.Current!.HopCount == 3 && healthy.Current.TotalCost == Math.Round(MeshGraph.CostOf(-55) + 1 + 1, 2), "hop count and energy should add up along the route");
+
+        var healed = mesh.Route(d, Down(a.ToLowerInvariant()))!;
+        Assert(healed.Status == RouteStatus.Rerouted, "with A down, D should be rerouted, not lost");
+        Assert(Ids(healed.Current).SequenceEqual([d, b, c, MeshGraph.GatewayId]), "the detour should run through C");
+        Assert(healed.FailedOnUsual.Single().Id == a && Ids(healed.Usual).Contains(a), "the report should name the node that broke the usual route");
+        Assert(mesh.Route(b, Down(a))!.NextHop == c, "with A down, B's next hop should switch to C");
+
+        var cutOff = mesh.Route(d, Down(b))!;
+        Assert(cutOff.Status == RouteStatus.Stranded && cutOff.Current is null && cutOff.NextHop is null, "with B down, D has no way home");
+        Assert(cutOff.RestoredBy.Single().Id == b, "repairing B should be the one fix for D");
+
+        var bothGone = mesh.Route(b, Down(a, c))!;
+        Assert(bothGone.Status == RouteStatus.Stranded && bothGone.RestoredBy.Select(v => v.Id).Order().SequenceEqual(new[] { a, c }.Order()),
+            "with A and C both down, bringing back either one should reconnect B");
+
+        Assert(mesh.Route(d, Down(d))!.Status == RouteStatus.Down, "a silent node should be reported down");
+        Assert(mesh.Route(MeshGraph.GatewayId, Down()) is null && mesh.Route("nope", Down()) is null, "the gateway and unknown ids have no route");
+
+        log.Add("mesh routes: traced by MAC, heal around a down node with a new next hop, stranded nodes name their repair");
         return log;
     }
     //----------------------------------------------------------------------------------------------------------------------//

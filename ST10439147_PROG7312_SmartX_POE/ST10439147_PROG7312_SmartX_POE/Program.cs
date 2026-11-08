@@ -525,14 +525,28 @@ api.MapGet("/mesh/reachability", (
     [FromQuery] string? subnet,
     [FromQuery] string? without) =>
 {
-    var down = anomalies.Disconnected
+    var report = mesh.Reachability(from ?? MeshGraph.GatewayId, DownSet(anomalies, without), string.IsNullOrWhiteSpace(subnet) ? null : subnet.Trim());
+    return report is null ? Results.NotFound(new { error = $"'{from}' is not a node on the mesh." }) : Results.Ok(report);
+});
+
+// Route tracking by MAC: the node's usual hop-by-hop route to the gateway and the route it
+// is on now. When a node on the usual route is down the status is Rerouted and `nextHop`
+// is the neighbour to hand packets to instead; when no route is left it is Stranded and
+// `restoredBy` lists the down nodes whose repair would reconnect it.
+// `without` works as on /mesh/reachability: ?without=A4:CF:12:9B:05:12
+api.MapGet("/mesh/route/{id}", (string id, MeshNetwork mesh, AnomalyEngine anomalies, [FromQuery] string? without) =>
+{
+    var report = mesh.Route(id, DownSet(anomalies, without));
+    return report is null ? Results.NotFound(new { error = $"'{id}' is not a node on the mesh." }) : Results.Ok(report);
+});
+
+// The nodes the mesh endpoints treat as down: the live disconnect HashSet from Part 2,
+// plus any comma-separated MACs passed in `without` for a what-if.
+static HashSet<string> DownSet(AnomalyEngine anomalies, string? without)
+    => anomalies.Disconnected
         .Concat((without ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         .Select(TelemetryStore.KeyFor)
         .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-    var report = mesh.Reachability(from ?? MeshGraph.GatewayId, down, string.IsNullOrWhiteSpace(subnet) ? null : subnet.Trim());
-    return report is null ? Results.NotFound(new { error = $"'{from}' is not a node on the mesh." }) : Results.Ok(report);
-});
 
 api.MapPost("/topology/validate", (DeploymentNode root) => TopologyValidator.Validate(root));
 

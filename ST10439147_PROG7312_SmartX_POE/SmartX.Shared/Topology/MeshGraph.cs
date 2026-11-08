@@ -98,6 +98,10 @@ public sealed class MeshGraph
 
     public int DegreeOf(string id) => Neighbours(id).Count;
 
+    /// <summary>The link from <paramref name="a"/> to <paramref name="b"/>, or null if they cannot hear each other. O(degree).</summary>
+    public MeshLink? LinkBetween(string a, string b)
+        => Neighbours(a).FirstOrDefault(l => string.Equals(l.To, b, StringComparison.OrdinalIgnoreCase));
+
     /// <summary>Every link once, not once per end.</summary>
     public IEnumerable<MeshLink> Links
         => _adjacency.Values.SelectMany(l => l).Where(l => string.Compare(l.From, l.To, StringComparison.OrdinalIgnoreCase) < 0);
@@ -177,6 +181,21 @@ public sealed record BfsTree(
     IReadOnlyDictionary<string, string> Parent)
 {
     public bool Reached(string id) => Hops.ContainsKey(id);
+
+    /// <summary>
+    /// The route from <paramref name="id"/> back to <see cref="Root"/>, both ends included:
+    /// follow <see cref="Parent"/> one hop at a time until the root, which has none. Because
+    /// BFS reached each node first by its fewest-hop path, this is a shortest-hop route.
+    /// O(hops). Null if the search never reached <paramref name="id"/>.
+    /// </summary>
+    public IReadOnlyList<string>? PathFrom(string id)
+    {
+        if (!Reached(id)) return null;
+
+        var path = new List<string> { id };
+        while (Parent.TryGetValue(path[^1], out var next)) path.Add(next);
+        return path;
+    }
 }
 
 /// <summary>A node the search reached, and how many hops it sits from where the search began.</summary>
@@ -195,6 +214,45 @@ public sealed record ReachabilityReport(
     IReadOnlyList<MeshVertex> Down,
     IReadOnlyList<MeshVertex> Stranded,
     IReadOnlyList<string> VisitOrder);
+
+/// <summary>
+/// A route through the mesh, node first and gateway last. <c>Links[i]</c> is the radio hop
+/// from <c>Hops[i]</c> to <c>Hops[i + 1]</c>; <see cref="TotalCost"/> adds up their energy.
+/// </summary>
+public sealed record MeshRoute(IReadOnlyList<MeshVertex> Hops, IReadOnlyList<MeshLink> Links, double TotalCost)
+{
+    public int HopCount => Links.Count;
+}
+
+/// <summary>Where a node's traffic stands right now.</summary>
+public enum RouteStatus
+{
+    /// <summary>Getting through on its usual route.</summary>
+    Online,
+    /// <summary>A node on its usual route is down; traffic has healed onto a detour.</summary>
+    Rerouted,
+    /// <summary>The node itself is silent.</summary>
+    Down,
+    /// <summary>The node is running, but every path it had runs through a down node.</summary>
+    Stranded
+}
+
+/// <summary>
+/// One node's route to the gateway. <see cref="Usual"/> is the route over the healthy mesh;
+/// <see cref="Current"/> is the route with down nodes taken out (null when there is none).
+/// <see cref="FailedOnUsual"/> are the down nodes that broke the usual route,
+/// <see cref="NextHop"/> is the neighbour the node should hand its packets to now, and
+/// <see cref="RestoredBy"/> - for a stranded node - the down nodes that would each
+/// reconnect it on their own if brought back.
+/// </summary>
+public sealed record RouteReport(
+    MeshVertex Node,
+    RouteStatus Status,
+    MeshRoute? Usual,
+    MeshRoute? Current,
+    IReadOnlyList<MeshVertex> FailedOnUsual,
+    string? NextHop,
+    IReadOnlyList<MeshVertex> RestoredBy);
 
 /// <summary>A vertex as the API shows it: the node plus what the dashboard needs to draw it.</summary>
 public sealed record MeshVertex(string Id, string Name, string DeploymentPath, bool IsGateway, int Degree);

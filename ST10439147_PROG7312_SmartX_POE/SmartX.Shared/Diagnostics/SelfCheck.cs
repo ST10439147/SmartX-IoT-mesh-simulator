@@ -75,7 +75,13 @@ public static class SelfCheck
         Assert(graph.BreadthFirst(gw, new HashSet<string> { gw }).Order.Count == 0, "a down root reaches nothing");
         Assert(graph.BreadthFirst("nope").Order.Count == 0, "an unknown root reaches nothing");
 
-        log.Add("bfs: exact hop counts, ring order, reroutes around a down node, strands what only it connected");
+        // Following the parent pointers gives the route home.
+        Assert(all.PathFrom("E")!.SequenceEqual(["E", "D", "B", "A", gw]), "E's route should run E-D-B-A-gateway");
+        Assert(withoutA.PathFrom("E")!.SequenceEqual(["E", "D", "B", "C", gw]), "with A down, E's route should heal through C");
+        Assert(withoutB.PathFrom("E") is null, "a stranded node should have no route");
+        Assert(all.PathFrom(gw)!.SequenceEqual([gw]), "the root's route is just itself");
+
+        log.Add("bfs: exact hop counts, ring order, reroutes around a down node, strands what only it connected, parent chain is the route");
     }
     //----------------------------------------------------------------------------------------------------------------------//
     private static void MeshGraphIsUndirectedAndWeighted(List<string> log)

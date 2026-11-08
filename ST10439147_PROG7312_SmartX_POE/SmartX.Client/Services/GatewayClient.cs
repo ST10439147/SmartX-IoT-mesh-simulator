@@ -84,6 +84,25 @@ public sealed class GatewayClient(HttpClient http)
             return null;
         }
     }
+
+    /// <summary>
+    /// One node's usual and current route to the gateway, by MAC or id, with
+    /// <paramref name="without"/> treated as down. Null if the gateway could not be reached or the node is unknown.
+    /// </summary>
+    public async Task<RouteReport?> GetRouteAsync(string macOrId, IEnumerable<string>? without = null, CancellationToken ct = default)
+    {
+        var url = $"api/mesh/route/{Uri.EscapeDataString(macOrId)}";
+        if (without?.Any() == true) url += $"?without={Uri.EscapeDataString(string.Join(',', without))}";
+
+        try
+        {
+            return await http.GetFromJsonAsync<RouteReport>(url, SmartXJson.Options, ct);
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+    }
 //----------------------------------------------------------------------------------------------------------------------//
     /// <summary>Registers a node. Field-level errors come straight back from the API's own validation.</summary>
     // Reference [17]: Microsoft. Handle errors in ASP.NET Core - problem details / ValidationProblem. Microsoft Learn.
