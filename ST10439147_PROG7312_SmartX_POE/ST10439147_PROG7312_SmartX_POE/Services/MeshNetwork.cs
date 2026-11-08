@@ -144,15 +144,20 @@ public sealed class MeshNetwork(TelemetryStore store)
     /// Traces one node's route to the gateway by MAC or id, and what an outage has done to it.
     /// Null if the node is not on the mesh (or is the gateway itself).
     ///
-    /// <para>Two BFS runs from the gateway: one over the healthy mesh gives the
-    /// <b>usual</b> route, one with the down nodes taken out gives the <b>current</b> route.
-    /// If the usual route runs through a down node and a current route still exists, the
-    /// mesh has healed around the failure and <see cref="RouteReport.NextHop"/> says
-    /// where the node should now send its packets. If no current route exists, the node is
-    /// stranded, and one more BFS per down node finds which repairs would reconnect it.</para>
+    /// <para>A BFS with the down nodes taken out gives the fewest-hop <b>current</b> route.
+    /// If the usual route runs through a down node and a route still exists, the mesh has
+    /// healed around the failure and <see cref="RouteReport.NextHop"/> says where the node
+    /// should now send its packets. If no route exists, the node is stranded, and one more
+    /// BFS per down node finds which repairs would reconnect it.</para>
+    ///
+    /// <para><b>Power-efficient routing (section 4).</b> Packets follow the minimum spanning
+    /// tree. <b>Usual</b> is the node's path along the healthy MST and <b>efficient</b> its
+    /// path along the live MST (down nodes excluded), so Rerouted means the route packets
+    /// really use was broken, and <see cref="RouteReport.NextHop"/> follows the live MST.
+    /// <b>Current</b> stays as the fewest-hop (BFS) comparison, and Dijkstra's cheapest cost
+    /// shows how close the MST route comes to the best this one node could do alone.
+    /// Reachability - stranded or not, and what would restore it - is still BFS.</para>
     /// </summary>
-    // ponytail: fewest hops, not least energy. The power-efficient (MST) routing in
-    // section 4 swaps the BFS tree for a minimum spanning tree.
     public RouteReport? Route(string macOrId, IReadOnlySet<string> down)
     {
         var sensors = store.Sensors;
@@ -166,13 +171,14 @@ public sealed class MeshNetwork(TelemetryStore store)
             if (!_graph.Contains(id) || id == MeshGraph.GatewayId) return null;
 
             var node = VertexFor(id, byId);
-            var usual = RouteOf(_graph.BreadthFirst(MeshGraph.GatewayId), id, byId);
+            // Usual = the route packets take on the healthy mesh: along the healthy MST.
+            var usual = RouteOf(_graph.MinimumSpanningTree(MeshGraph.GatewayId).PathFrom(id), byId);
             var failed = usual?.Hops.Where(h => down.Contains(h.Id) && h.Id != id).ToList() ?? [];
 
             if (down.Contains(id))
-                return new RouteReport(node, RouteStatus.Down, usual, null, failed, null, []);
+                return new RouteReport(node, RouteStatus.Down, usual, null, null, failed, null, null, []);
 
-            var current = RouteOf(_graph.BreadthFirst(MeshGraph.GatewayId, down), id, byId);
+            var current = RouteOf(_graph.BreadthFirst(MeshGraph.GatewayId, down).PathFrom(id), byId);
 
             if (current is null)
             {
@@ -185,18 +191,21 @@ public sealed class MeshNetwork(TelemetryStore store)
                     .OrderBy(v => v.Name)
                     .ToList();
 
-                return new RouteReport(node, RouteStatus.Stranded, usual, null, failed, null, restoredBy);
+                return new RouteReport(node, RouteStatus.Stranded, usual, null, null, failed, null, null, restoredBy);
             }
 
+            // Prim's spans exactly what BFS reaches, so a node with a current route always has an efficient one.
+            var efficient = RouteOf(_graph.MinimumSpanningTree(MeshGraph.GatewayId, down).PathFrom(id), byId)!;
+            var cheapest = Math.Round(_graph.CheapestCosts(MeshGraph.GatewayId, down)[id], 2);
+
             var status = failed.Count > 0 ? RouteStatus.Rerouted : RouteStatus.Online;
-            return new RouteReport(node, status, usual, current, failed, current.Hops[1].Id, []);
+            return new RouteReport(node, status, usual, current, efficient, failed, efficient.Hops[1].Id, cheapest, []);
         }
     }
 
-    // Turns a BFS tree's parent chain into hops plus the links between them. Caller holds _gate.
-    private MeshRoute? RouteOf(BfsTree tree, string id, IReadOnlyDictionary<string, SensorRegistration> byId)
+    // Turns a tree's parent chain (node first, gateway last) into hops plus the links between them. Caller holds _gate.
+    private MeshRoute? RouteOf(IReadOnlyList<string>? path, IReadOnlyDictionary<string, SensorRegistration> byId)
     {
-        var path = tree.PathFrom(id);
         if (path is null) return null;
 
         var links = path.Zip(path.Skip(1), (a, b) => _graph.LinkBetween(a, b)!).ToList();

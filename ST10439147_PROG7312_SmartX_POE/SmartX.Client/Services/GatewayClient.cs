@@ -105,8 +105,9 @@ public sealed class GatewayClient(HttpClient http)
     }
 
     /// <summary>
-    /// One node's usual and current route to the gateway, by MAC or id, with
-    /// <paramref name="without"/> treated as down. Null if the gateway could not be reached or the node is unknown.
+    /// One node's routes to the gateway, by MAC or id: the power-efficient MST route it uses,
+    /// the fewest-hop usual and current routes, and Dijkstra's cheapest cost for comparison,
+    /// with <paramref name="without"/> treated as down. Null if the gateway could not be reached or the node is unknown.
     /// </summary>
     public async Task<RouteReport?> GetRouteAsync(string macOrId, IEnumerable<string>? without = null, CancellationToken ct = default)
     {

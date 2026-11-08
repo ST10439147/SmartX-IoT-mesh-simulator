@@ -529,10 +529,12 @@ api.MapGet("/mesh/reachability", (
     return report is null ? Results.NotFound(new { error = $"'{from}' is not a node on the mesh." }) : Results.Ok(report);
 });
 
-// Route tracking by MAC: the node's usual hop-by-hop route to the gateway and the route it
-// is on now. When a node on the usual route is down the status is Rerouted and `nextHop`
-// is the neighbour to hand packets to instead; when no route is left it is Stranded and
-// `restoredBy` lists the down nodes whose repair would reconnect it.
+// Route tracking by MAC. Packets follow the minimum spanning tree: `usual` is the node's
+// path along the healthy MST, `efficient` its path along the live MST, and `nextHop` the
+// first hop of that. `current` is the fewest-hop (BFS) route for comparison, and
+// `cheapestCost` the lowest energy any single route could reach (Dijkstra).
+// When a node on the usual route is down the status is Rerouted; when no route is left it
+// is Stranded and `restoredBy` lists the down nodes whose repair would reconnect it.
 // `without` works as on /mesh/reachability: ?without=A4:CF:12:9B:05:12
 api.MapGet("/mesh/route/{id}", (string id, MeshNetwork mesh, AnomalyEngine anomalies, [FromQuery] string? without) =>
 {

@@ -87,6 +87,75 @@ public static class SelfCheck
         }
 
         log.Add("prim's mst: skips the costly direct link BFS takes, heals around down nodes, matches kruskal's on 25 random meshes");
+
+        MstRoutesAgainstDijkstra(triangle, random, log);
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    // Reference: Bellman, R. (1958). On a routing problem. Quarterly of Applied Mathematics, 16(1), 87-90.
+    private static void MstRoutesAgainstDijkstra(MeshGraph triangle, Random random, List<string> log)
+    {
+        const string gw = MeshGraph.GatewayId;
+
+        // On the triangle, the MST route home for B goes through A, which is also the cheapest.
+        var mst = triangle.MinimumSpanningTree(gw);
+        var cheapest = triangle.CheapestCosts(gw);
+        Assert(mst.PathFrom("D")!.SequenceEqual(["D", "B", "A", gw]), "D's MST route should run D-B-A-gateway");
+        Assert(mst.PathFrom(gw)!.SequenceEqual([gw]) && mst.PathFrom("nope") is null, "the root's route is itself; an unknown node has none");
+        Assert(cheapest[gw] == 0 && cheapest["B"] == 2 && Math.Abs(cheapest["D"] - (2 + MeshGraph.CostOf(-55))) < 1e-9,
+            "Dijkstra: B costs 1 + 1 through A, not 100 direct");
+        Assert(!triangle.CheapestCosts(gw, new HashSet<string> { "b" }).ContainsKey("D"), "Dijkstra should not route through a down node");
+
+        // Random meshes: Dijkstra must match Bellman-Ford, and no route - MST or BFS - may beat Dijkstra.
+        var gaps = 0;
+        var routes = 0;
+        for (var round = 0; round < 25; round++)
+        {
+            var graph = new MeshGraph();
+            var nodes = Enumerable.Range(0, 40).Select(i => $"N{i}").Prepend(gw).ToList();
+            for (var e = 0; e < 120; e++)
+            {
+                var a = nodes[random.Next(nodes.Count)];
+                var b = nodes[random.Next(nodes.Count)];
+                if (a != b) graph.Connect(a, b, -random.Next(40, 86));
+            }
+
+            var dijkstra = graph.CheapestCosts(gw);
+            var bellman = BellmanFord(graph, gw);
+            Assert(dijkstra.Count == bellman.Count && dijkstra.All(p => Math.Abs(p.Value - bellman[p.Key]) < 1e-6),
+                $"Dijkstra should agree with Bellman-Ford on every node, round {round}");
+
+            var tree = graph.MinimumSpanningTree(gw);
+            var bfs = graph.BreadthFirst(gw);
+            foreach (var (node, best) in dijkstra)
+            {
+                var mstCost = PathCost(graph, tree.PathFrom(node)!);
+                var bfsCost = PathCost(graph, bfs.PathFrom(node)!);
+                Assert(mstCost >= best - 1e-6 && bfsCost >= best - 1e-6, "no route can be cheaper than Dijkstra's");
+                if (mstCost > best + 1e-6) gaps++;
+                routes++;
+            }
+        }
+
+        // The honest part: the MST is cheapest for the network, not always for each node.
+        Assert(gaps > 0, "on random meshes some MST routes should cost more than that node's own cheapest path");
+
+        log.Add($"mst routes: follow the tree home, never beat dijkstra (which matches bellman-ford); {gaps} of {routes:N0} node routes cost more than their own cheapest path");
+    }
+
+    private static double PathCost(MeshGraph graph, IReadOnlyList<string> path)
+        => path.Zip(path.Skip(1), (a, b) => graph.LinkBetween(a, b)!.Cost).Sum();
+
+    // Bellman-Ford: relax every link V - 1 times. Slow, O(V x E), but with no heap and no
+    // greedy choice it is an independent answer to check Dijkstra's against.
+    private static Dictionary<string, double> BellmanFord(MeshGraph graph, string root)
+    {
+        var cost = new Dictionary<string, double> { [root] = 0 };
+        for (var i = 1; i < graph.VertexCount; i++)
+            foreach (var link in graph.Links.SelectMany(l => new[] { l, l with { From = l.To, To = l.From } }))
+                if (cost.TryGetValue(link.From, out var from) && from + link.Cost < cost.GetValueOrDefault(link.To, double.PositiveInfinity))
+                    cost[link.To] = from + link.Cost;
+
+        return cost;
     }
 
     // Kruskal's with union-find, as an independent answer to check Prim's against: sort every

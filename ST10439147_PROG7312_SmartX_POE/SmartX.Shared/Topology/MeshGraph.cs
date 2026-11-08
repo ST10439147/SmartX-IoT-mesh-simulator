@@ -223,6 +223,39 @@ public sealed class MeshGraph
     }
     //----------------------------------------------------------------------------------------------------------------------//
     /// <summary>
+    /// Dijkstra's algorithm: the lowest possible energy from <paramref name="root"/> to every
+    /// node it can reach, skipping <paramref name="down"/>. Used as a yardstick for the MST
+    /// routes - an MST minimises the energy of the whole network's links, which does not
+    /// guarantee every single node its own cheapest path; this says how close each one gets.
+    ///
+    /// <para>Pops the closest unsettled node from the <see cref="MinHeap{TElement,TPriority}"/>,
+    /// settles it at that cost, and pushes its neighbours at cost + link. With non-negative
+    /// link costs the first time a node is popped is its cheapest, so later (stale) entries
+    /// are skipped - the same lazy deletion as Prim's. O(E log E).</para>
+    /// </summary>
+    // Reference: Dijkstra, E. W. (1959). A note on two problems in connexion with graphs. Numerische Mathematik, 1, 269-271.
+    public IReadOnlyDictionary<string, double> CheapestCosts(string root, IReadOnlySet<string>? down = null)
+    {
+        var blocked = new HashSet<string>(down ?? new HashSet<string>(), StringComparer.OrdinalIgnoreCase);
+        var settled = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        if (!_adjacency.ContainsKey(root) || blocked.Contains(root)) return settled;
+
+        var heap = new MinHeap<string, double>();
+        heap.Push(root, 0);
+
+        while (heap.TryPop(out var node, out var cost))
+        {
+            if (!settled.TryAdd(node, cost)) continue;   // stale: already settled more cheaply
+
+            foreach (var link in _adjacency[node])
+                if (!settled.ContainsKey(link.To) && !blocked.Contains(link.To))
+                    heap.Push(link.To, cost + link.Cost);
+        }
+
+        return settled;
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    /// <summary>
     /// Relative transmit energy for one packet over a link with this RSSI. dBm is a log
     /// scale - every 10 dB weaker means ten times less power arrives - so the radio has to
     /// put out ten times more to be heard reliably. A -50 dBm link costs 1.0, -60 costs 10,
@@ -252,12 +285,17 @@ public sealed record BfsTree(
     /// BFS reached each node first by its fewest-hop path, this is a shortest-hop route.
     /// O(hops). Null if the search never reached <paramref name="id"/>.
     /// </summary>
-    public IReadOnlyList<string>? PathFrom(string id)
-    {
-        if (!Reached(id)) return null;
+    public IReadOnlyList<string>? PathFrom(string id) => Reached(id) ? ParentChain.Walk(Parent, id) : null;
+}
 
+/// <summary>Walking a rooted tree's parent pointers, shared by the BFS tree and the MST.</summary>
+internal static class ParentChain
+{
+    /// <summary><paramref name="id"/>, its parent, its parent's parent... up to the root, which has no parent. O(depth).</summary>
+    public static IReadOnlyList<string> Walk(IReadOnlyDictionary<string, string> parent, string id)
+    {
         var path = new List<string> { id };
-        while (Parent.TryGetValue(path[^1], out var next)) path.Add(next);
+        while (parent.TryGetValue(path[^1], out var next)) path.Add(next);
         return path;
     }
 }
@@ -277,6 +315,13 @@ public sealed record MstTree(
 {
     /// <summary>True if <paramref name="id"/> is in the tree: the root, or any vertex with a parent.</summary>
     public bool Spans(string id) => Parent.ContainsKey(id) || (Order.Count > 0 && string.Equals(id, Root, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// The route from <paramref name="id"/> to the root along the tree's links: the
+    /// power-efficient route the gateway uses. A tree has exactly one path between any two
+    /// vertices, so there is nothing to search - just follow the parents. Null if not spanned.
+    /// </summary>
+    public IReadOnlyList<string>? PathFrom(string id) => Spans(id) ? ParentChain.Walk(Parent, id) : null;
 }
 
 /// <summary>
@@ -336,20 +381,30 @@ public enum RouteStatus
 }
 
 /// <summary>
-/// One node's route to the gateway. <see cref="Usual"/> is the route over the healthy mesh;
-/// <see cref="Current"/> is the route with down nodes taken out (null when there is none).
-/// <see cref="FailedOnUsual"/> are the down nodes that broke the usual route,
-/// <see cref="NextHop"/> is the neighbour the node should hand its packets to now, and
-/// <see cref="RestoredBy"/> - for a stranded node - the down nodes that would each
-/// reconnect it on their own if brought back.
+/// One node's route to the gateway.
+/// <list type="bullet">
+/// <item><see cref="Usual"/>: the route along the healthy minimum spanning tree - where the
+/// node's packets go when nothing is down.</item>
+/// <item><see cref="Efficient"/>: the route along the live minimum spanning tree (Prim's,
+/// down nodes excluded) - where its packets go now. Null exactly when <see cref="Current"/> is.</item>
+/// <item><see cref="Current"/>: fewest hops with down nodes taken out (BFS), for comparison;
+/// null when there is no route at all.</item>
+/// </list>
+/// <see cref="FailedOnUsual"/> are the down nodes that broke the usual route.
+/// <see cref="NextHop"/> is the neighbour to hand packets to now, taken from the efficient route.
+/// <see cref="CheapestCost"/> is the lowest energy any single route could reach (Dijkstra),
+/// to measure the efficient route against. <see cref="RestoredBy"/> - for a stranded node -
+/// lists the down nodes that would each reconnect it on their own if brought back.
 /// </summary>
 public sealed record RouteReport(
     MeshVertex Node,
     RouteStatus Status,
     MeshRoute? Usual,
     MeshRoute? Current,
+    MeshRoute? Efficient,
     IReadOnlyList<MeshVertex> FailedOnUsual,
     string? NextHop,
+    double? CheapestCost,
     IReadOnlyList<MeshVertex> RestoredBy);
 
 /// <summary>A vertex as the API shows it: the node plus what the dashboard needs to draw it.</summary>
