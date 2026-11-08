@@ -86,8 +86,28 @@ public sealed class GatewayClient(HttpClient http)
     }
 
     /// <summary>
-    /// One node's usual and current route to the gateway, by MAC or id, with
-    /// <paramref name="without"/> treated as down. Null if the gateway could not be reached or the node is unknown.
+    /// The live mesh's minimum spanning tree (Prim's, from the gateway), priced against the
+    /// BFS tree and the full mesh, with <paramref name="without"/> treated as down. Null if the gateway could not be reached.
+    /// </summary>
+    public async Task<MstReport?> GetMstAsync(IEnumerable<string>? without = null, CancellationToken ct = default)
+    {
+        var url = "api/mesh/mst";
+        if (without?.Any() == true) url += $"?without={Uri.EscapeDataString(string.Join(',', without))}";
+
+        try
+        {
+            return await http.GetFromJsonAsync<MstReport>(url, SmartXJson.Options, ct);
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// One node's routes to the gateway, by MAC or id: the power-efficient MST route it uses,
+    /// the fewest-hop usual and current routes, and Dijkstra's cheapest cost for comparison,
+    /// with <paramref name="without"/> treated as down. Null if the gateway could not be reached or the node is unknown.
     /// </summary>
     public async Task<RouteReport?> GetRouteAsync(string macOrId, IEnumerable<string>? without = null, CancellationToken ct = default)
     {

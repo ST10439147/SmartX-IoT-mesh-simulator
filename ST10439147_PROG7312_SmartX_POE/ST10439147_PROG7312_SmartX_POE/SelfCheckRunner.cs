@@ -432,7 +432,49 @@ internal static class SelfCheckRunner
         Assert(mesh.Route(d, Down(d))!.Status == RouteStatus.Down, "a silent node should be reported down");
         Assert(mesh.Route(MeshGraph.GatewayId, Down()) is null && mesh.Route("nope", Down()) is null, "the gateway and unknown ids have no route");
 
-        log.Add("mesh routes: traced by MAC, heal around a down node with a new next hop, stranded nodes name their repair");
+        // The efficient (MST) route and the Dijkstra yardstick ride along on every live route.
+        Assert(Ids(healthy.Efficient).SequenceEqual([d, b, a, MeshGraph.GatewayId]) && healthy.CheapestCost == healthy.Current.TotalCost,
+            "on this mesh D's MST route is also its cheapest");
+        Assert(healthy.NextHop == healthy.Efficient!.Hops[1].Id, "the next hop should come from the efficient route");
+        Assert(Ids(healed.Efficient).SequenceEqual([d, b, c, MeshGraph.GatewayId]), "with A down the MST re-forms and D's efficient route heals through C");
+        Assert(cutOff.Efficient is null && cutOff.CheapestCost is null, "a stranded node has no efficient route either");
+
+        log.Add("mesh routes: traced by MAC, heal around a down node with a new next hop, stranded nodes name their repair, efficient route follows the mst");
+
+        // MST report on the same mesh: GW-A (1), A-B (1) and B-D (3.16) are the cheap links;
+        // C has two links, GW-C and C-B, both -60 dBm (cost 10), and joins through one of them.
+        // The other is the one link the MST leaves out.
+        var tree = mesh.Mst(Down());
+        Assert(tree.Vertices.Count == 5 && tree.Edges.Count == 4 && tree.Down.Count == 0 && tree.Unreached.Count == 0, "all five vertices should be spanned by four links");
+        Assert(tree.TotalCost == Math.Round(1 + 10 + 1 + MeshGraph.CostOf(-55), 2), $"MST should be GW-A + GW-C + A-B + B-D, got {tree.TotalCost}");
+        Assert(tree.MeshLinks == 5 && tree.MeshCost == Math.Round(tree.TotalCost + 10, 2), "the full mesh adds the C-B link on top");
+        Assert(tree.BfsTreeCost >= tree.TotalCost, "no routing tree can cost less than the MST");
+
+        var withoutB = mesh.Mst(Down(b.ToLowerInvariant()));
+        Assert(withoutB.Down.Single().Id == b && withoutB.Unreached.Single().Id == d, "with B down, D cannot be spanned");
+        Assert(withoutB.Edges.Count == 2 && withoutB.MeshLinks == 2, "only GW-A and GW-C are left live");
+
+        log.Add("mesh mst report: spans the live mesh, priced against the bfs tree and the full mesh, re-forms around down nodes");
+
+        // A node whose fewest-hop and power-efficient routes differ: E hears the gateway
+        // directly but weakly (cost 100), and D strongly (cost 1). BFS sends it direct;
+        // the MST sends it E-D-B-A-gateway for 1 + 3.16 + 1 + 1.
+        var e = Register("02:00:00:00:00:0E", "Facility A/Zone 1/Sub-Zone A").Id;
+        mesh.Link(MeshGraph.GatewayId, e, -70);
+        mesh.Link(d, e, -50);
+
+        var split = mesh.Route(e, Down())!;
+        Assert(Ids(split.Current).SequenceEqual([e, MeshGraph.GatewayId]), "BFS should take E's one weak hop");
+        Assert(Ids(split.Efficient).SequenceEqual([e, d, b, a, MeshGraph.GatewayId]) && split.NextHop == d, "the MST should send E through D instead");
+        Assert(split.Efficient!.TotalCost < split.Current!.TotalCost && split.CheapestCost == split.Efficient.TotalCost, "the MST route should be the cheaper one, and here the cheapest possible");
+
+        // B is on E's MST route but not on its BFS route. Losing it must still count as a reroute.
+        var lostB = mesh.Route(e, Down(b))!;
+        Assert(lostB.Status == RouteStatus.Rerouted && lostB.FailedOnUsual.Single().Id == b,
+            "a down node on the route packets actually use should make the node Rerouted");
+        Assert(Ids(lostB.Efficient).SequenceEqual([e, MeshGraph.GatewayId]), "with B down, E's only way home is its weak direct link");
+
+        log.Add("mesh routes: when the fewest-hop and mst routes differ, packets follow the mst and its failures count as reroutes");
         return log;
     }
     //----------------------------------------------------------------------------------------------------------------------//

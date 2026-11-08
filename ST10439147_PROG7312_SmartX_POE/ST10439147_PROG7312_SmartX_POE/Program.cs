@@ -529,16 +529,25 @@ api.MapGet("/mesh/reachability", (
     return report is null ? Results.NotFound(new { error = $"'{from}' is not a node on the mesh." }) : Results.Ok(report);
 });
 
-// Route tracking by MAC: the node's usual hop-by-hop route to the gateway and the route it
-// is on now. When a node on the usual route is down the status is Rerouted and `nextHop`
-// is the neighbour to hand packets to instead; when no route is left it is Stranded and
-// `restoredBy` lists the down nodes whose repair would reconnect it.
+// Route tracking by MAC. Packets follow the minimum spanning tree: `usual` is the node's
+// path along the healthy MST, `efficient` its path along the live MST, and `nextHop` the
+// first hop of that. `current` is the fewest-hop (BFS) route for comparison, and
+// `cheapestCost` the lowest energy any single route could reach (Dijkstra).
+// When a node on the usual route is down the status is Rerouted; when no route is left it
+// is Stranded and `restoredBy` lists the down nodes whose repair would reconnect it.
 // `without` works as on /mesh/reachability: ?without=A4:CF:12:9B:05:12
 api.MapGet("/mesh/route/{id}", (string id, MeshNetwork mesh, AnomalyEngine anomalies, [FromQuery] string? without) =>
 {
     var report = mesh.Route(id, DownSet(anomalies, without));
     return report is null ? Results.NotFound(new { error = $"'{id}' is not a node on the mesh." }) : Results.Ok(report);
 });
+
+// Prim's minimum spanning tree of the live mesh, grown from the gateway: the links that keep
+// every reachable node connected for the least total transmit energy. The report prices it
+// against the fewest-hop BFS tree and against leaving every link active.
+// Down nodes are left out, so the tree re-forms around an outage: ?without=DC:A6:32:77:11:02
+api.MapGet("/mesh/mst", (MeshNetwork mesh, AnomalyEngine anomalies, [FromQuery] string? without) =>
+    mesh.Mst(DownSet(anomalies, without)));
 
 // The nodes the mesh endpoints treat as down: the live disconnect HashSet from Part 2,
 // plus any comma-separated MACs passed in `without` for a what-if.

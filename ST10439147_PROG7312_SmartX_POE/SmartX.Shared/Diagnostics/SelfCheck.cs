@@ -32,8 +32,187 @@ public static class SelfCheck
         AvlTreeStaysBalancedAndAnswersRanges(log);
         MeshGraphIsUndirectedAndWeighted(log);
         BreadthFirstFindsReachableAndStrandedNodes(log);
+        MinHeapAlwaysPopsTheSmallest(log);
+        PrimsMinimumSpanningTreeMatchesKruskal(log);
 
         return log;
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    // Reference: Kruskal, J. B. (1956). On the shortest spanning subtree of a graph and the traveling salesman problem. Proc. AMS, 7(1), 48-50.
+    private static void PrimsMinimumSpanningTreeMatchesKruskal(List<string> log)
+    {
+        const string gw = MeshGraph.GatewayId;
+
+        // A triangle: the direct GW-B link is weak (cost 100), going through A costs 1 + 1.
+        // BFS would take the direct link because it is fewer hops; the MST must not.
+        var triangle = new MeshGraph();
+        triangle.Connect(gw, "A", -50);
+        triangle.Connect("A", "B", -50);
+        triangle.Connect(gw, "B", -70);
+        triangle.Connect("B", "D", -55);
+
+        var mst = triangle.MinimumSpanningTree(gw);
+        Assert(mst.TotalCost == Math.Round(1 + 1 + MeshGraph.CostOf(-55), 2), $"MST should cost 1 + 1 + 3.16, got {mst.TotalCost}");
+        Assert(mst.Edges.Count == 3 && mst.Edges.All(e => !(e.From == gw && e.To == "B")), "the expensive direct GW-B link should be left out");
+        Assert(mst.Parent["B"] == "A" && mst.Parent["D"] == "B" && mst.Order[0] == gw, "the tree should be rooted at the gateway with B hanging off A");
+        Assert(mst.Edges.All(e => mst.Parent[e.To] == e.From), "every tree link should point from parent to child");
+        Assert(triangle.BreadthFirst(gw).Parent["B"] == gw, "for contrast, BFS should have taken the 1-hop direct link");
+
+        // Down nodes are left out; what only they connected cannot be spanned.
+        var withoutB = triangle.MinimumSpanningTree(gw, new HashSet<string> { "b" });
+        Assert(withoutB.Spans("A") && !withoutB.Spans("B") && !withoutB.Spans("D") && withoutB.TotalCost == 1, "with B down the tree is just GW-A");
+        Assert(triangle.MinimumSpanningTree(gw, new HashSet<string> { gw }).Order.Count == 0, "a down root spans nothing");
+
+        // Random meshes: Prim's total must equal an independent Kruskal's on the same component.
+        var random = new Random(7312);
+        for (var round = 0; round < 25; round++)
+        {
+            var graph = new MeshGraph();
+            var nodes = Enumerable.Range(0, 40).Select(i => $"N{i}").Prepend(gw).ToList();
+            for (var e = 0; e < 120; e++)
+            {
+                var a = nodes[random.Next(nodes.Count)];
+                var b = nodes[random.Next(nodes.Count)];
+                if (a != b) graph.Connect(a, b, -random.Next(40, 86));
+            }
+
+            var down = new HashSet<string> { nodes[1 + random.Next(40)], nodes[1 + random.Next(40)] };
+            var prim = graph.MinimumSpanningTree(gw, down);
+            var component = graph.BreadthFirst(gw, down).Order.ToHashSet();
+
+            Assert(prim.Order.ToHashSet().SetEquals(component), "Prim's should span exactly the nodes BFS can reach");
+            Assert(prim.Edges.Count == component.Count - 1, "a spanning tree of n nodes has n - 1 links");
+            Assert(Math.Round(prim.TotalCost, 2) == Math.Round(Kruskal(graph, component), 2),
+                $"Prim's ({prim.TotalCost}) and Kruskal's should agree on the minimum cost, round {round}");
+        }
+
+        log.Add("prim's mst: skips the costly direct link BFS takes, heals around down nodes, matches kruskal's on 25 random meshes");
+
+        MstRoutesAgainstDijkstra(triangle, random, log);
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    // Reference: Bellman, R. (1958). On a routing problem. Quarterly of Applied Mathematics, 16(1), 87-90.
+    private static void MstRoutesAgainstDijkstra(MeshGraph triangle, Random random, List<string> log)
+    {
+        const string gw = MeshGraph.GatewayId;
+
+        // On the triangle, the MST route home for B goes through A, which is also the cheapest.
+        var mst = triangle.MinimumSpanningTree(gw);
+        var cheapest = triangle.CheapestCosts(gw);
+        Assert(mst.PathFrom("D")!.SequenceEqual(["D", "B", "A", gw]), "D's MST route should run D-B-A-gateway");
+        Assert(mst.PathFrom(gw)!.SequenceEqual([gw]) && mst.PathFrom("nope") is null, "the root's route is itself; an unknown node has none");
+        Assert(cheapest[gw] == 0 && cheapest["B"] == 2 && Math.Abs(cheapest["D"] - (2 + MeshGraph.CostOf(-55))) < 1e-9,
+            "Dijkstra: B costs 1 + 1 through A, not 100 direct");
+        Assert(!triangle.CheapestCosts(gw, new HashSet<string> { "b" }).ContainsKey("D"), "Dijkstra should not route through a down node");
+
+        // Random meshes: Dijkstra must match Bellman-Ford, and no route - MST or BFS - may beat Dijkstra.
+        var gaps = 0;
+        var routes = 0;
+        for (var round = 0; round < 25; round++)
+        {
+            var graph = new MeshGraph();
+            var nodes = Enumerable.Range(0, 40).Select(i => $"N{i}").Prepend(gw).ToList();
+            for (var e = 0; e < 120; e++)
+            {
+                var a = nodes[random.Next(nodes.Count)];
+                var b = nodes[random.Next(nodes.Count)];
+                if (a != b) graph.Connect(a, b, -random.Next(40, 86));
+            }
+
+            var dijkstra = graph.CheapestCosts(gw);
+            var bellman = BellmanFord(graph, gw);
+            Assert(dijkstra.Count == bellman.Count && dijkstra.All(p => Math.Abs(p.Value - bellman[p.Key]) < 1e-6),
+                $"Dijkstra should agree with Bellman-Ford on every node, round {round}");
+
+            var tree = graph.MinimumSpanningTree(gw);
+            var bfs = graph.BreadthFirst(gw);
+            foreach (var (node, best) in dijkstra)
+            {
+                var mstCost = PathCost(graph, tree.PathFrom(node)!);
+                var bfsCost = PathCost(graph, bfs.PathFrom(node)!);
+                Assert(mstCost >= best - 1e-6 && bfsCost >= best - 1e-6, "no route can be cheaper than Dijkstra's");
+                if (mstCost > best + 1e-6) gaps++;
+                routes++;
+            }
+        }
+
+        // The honest part: the MST is cheapest for the network, not always for each node.
+        Assert(gaps > 0, "on random meshes some MST routes should cost more than that node's own cheapest path");
+
+        log.Add($"mst routes: follow the tree home, never beat dijkstra (which matches bellman-ford); {gaps} of {routes:N0} node routes cost more than their own cheapest path");
+    }
+
+    private static double PathCost(MeshGraph graph, IReadOnlyList<string> path)
+        => path.Zip(path.Skip(1), (a, b) => graph.LinkBetween(a, b)!.Cost).Sum();
+
+    // Bellman-Ford: relax every link V - 1 times. Slow, O(V x E), but with no heap and no
+    // greedy choice it is an independent answer to check Dijkstra's against.
+    private static Dictionary<string, double> BellmanFord(MeshGraph graph, string root)
+    {
+        var cost = new Dictionary<string, double> { [root] = 0 };
+        for (var i = 1; i < graph.VertexCount; i++)
+            foreach (var link in graph.Links.SelectMany(l => new[] { l, l with { From = l.To, To = l.From } }))
+                if (cost.TryGetValue(link.From, out var from) && from + link.Cost < cost.GetValueOrDefault(link.To, double.PositiveInfinity))
+                    cost[link.To] = from + link.Cost;
+
+        return cost;
+    }
+
+    // Kruskal's with union-find, as an independent answer to check Prim's against: sort every
+    // link by cost, keep each one that joins two separate groups.
+    private static double Kruskal(MeshGraph graph, HashSet<string> component)
+    {
+        var group = component.ToDictionary(v => v, v => v);
+        string Find(string v) => group[v] == v ? v : group[v] = Find(group[v]);
+
+        var total = 0.0;
+        foreach (var link in graph.Links.Where(l => component.Contains(l.From) && component.Contains(l.To)).OrderBy(l => l.Cost))
+        {
+            var (a, b) = (Find(link.From), Find(link.To));
+            if (a == b) continue;
+            group[a] = b;
+            total += link.Cost;
+        }
+
+        return total;
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    // Reference: Cormen, T. H. et al. (2022). Introduction to Algorithms, 4th ed., ch. 6. MIT Press.
+    private static void MinHeapAlwaysPopsTheSmallest(List<string> log)
+    {
+        var heap = new MinHeap<string, double>();
+        Assert(!heap.TryPop(out _, out _) && !heap.TryPeek(out _, out _) && heap.Height == 0, "an empty heap has nothing to pop or peek");
+
+        // 10,000 random priorities with plenty of repeats: popping them all must give them back sorted.
+        var random = new Random(7312);
+        var priorities = Enumerable.Range(0, 10_000).Select(_ => Math.Round(random.NextDouble() * 500, 1)).ToList();
+        foreach (var p in priorities) heap.Push($"link-{p}", p);
+
+        Assert(heap.Count == 10_000 && heap.IsValid(), "every push should keep the heap property");
+        Assert(heap.Height == 14, $"10,000 items should sit in floor(log2 n) + 1 = 14 levels, got {heap.Height}");
+        Assert(heap.TryPeek(out _, out var top) && top == priorities.Min(), "peek should show the smallest priority");
+
+        var popped = new List<double>();
+        while (heap.TryPop(out var element, out var priority))
+        {
+            Assert(element == $"link-{priority}", "an element should come out with its own priority");
+            popped.Add(priority);
+            if (popped.Count % 1_000 == 0) Assert(heap.IsValid(), "every pop should keep the heap property");
+        }
+
+        Assert(popped.SequenceEqual(priorities.Order()), "popping everything should return the priorities in ascending order");
+        Assert(heap.Count == 0, "the heap should be empty after popping everything");
+
+        // Interleaved pushes and pops, the way Prim's uses it.
+        heap.Push("c", 3);
+        heap.Push("a", 1);
+        Assert(heap.TryPop(out var first, out _) && first == "a", "the smaller of two should come out first");
+        heap.Push("b", 2);
+        heap.Push("d", 0.5);
+        Assert(heap.TryPop(out var next, out _) && next == "d", "an item pushed after a pop should still jump the queue if it is smallest");
+        Assert(heap.TryPop(out next, out _) && next == "b" && heap.TryPop(out next, out _) && next == "c", "the rest should follow in order");
+
+        log.Add("min-heap: array-backed, pops 10,000 random priorities in sorted order, O(log n) height, interleaved push/pop");
     }
     //----------------------------------------------------------------------------------------------------------------------//
     private static void BreadthFirstFindsReachableAndStrandedNodes(List<string> log)
