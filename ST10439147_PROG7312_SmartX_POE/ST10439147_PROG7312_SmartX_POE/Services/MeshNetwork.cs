@@ -49,18 +49,61 @@ public sealed class MeshNetwork(TelemetryStore store)
         {
             Sync(sensors);
 
-            var vertices = _graph.Vertices
-                .Select(id => byId.TryGetValue(id, out var s)
-                    ? new MeshVertex(id, s.DisplayName, s.DeploymentPath, false, _graph.DegreeOf(id))
-                    : new MeshVertex(id, "Central gateway", GatewayPath, true, _graph.DegreeOf(id)))
-                .OrderByDescending(v => v.IsGateway)
-                .ThenBy(v => v.DeploymentPath)
-                .ThenBy(v => v.Name)
-                .ToList();
-
+            var vertices = Ordered(_graph.Vertices.Select(id => VertexFor(id, byId))).ToList();
             return new MeshView(vertices, _graph.Links.ToList());
         }
     }
+    //----------------------------------------------------------------------------------------------------------------------//
+    /// <summary>
+    /// Runs a BFS from <paramref name="from"/> (the gateway by default) with every node in
+    /// <paramref name="down"/> taken out of the mesh, and sorts every other node into
+    /// reachable or stranded. Null if <paramref name="from"/> is not on the graph.
+    /// </summary>
+    /// <param name="down">Nodes that cannot send or relay - the gateway's disconnect set.</param>
+    /// <param name="subnet">Optional deployment-path prefix, e.g. <c>Facility A/Zone 1</c>, to narrow the lists to one area.</param>
+    public ReachabilityReport? Reachability(string from, IReadOnlySet<string> down, string? subnet = null)
+    {
+        var sensors = store.Sensors;
+        var byId = sensors.ToDictionary(s => s.Id, StringComparer.OrdinalIgnoreCase);
+        from = TelemetryStore.KeyFor(from);
+
+        lock (_gate)
+        {
+            Sync(sensors);
+            if (!_graph.Contains(from)) return null;
+
+            var tree = _graph.BreadthFirst(from, down);
+
+            // The subnet filter only narrows what is reported. The search itself always runs
+            // over the whole mesh, because a Zone 1 node's way home can run through Zone 2.
+            bool InSubnet(MeshVertex v) => subnet is null || v.DeploymentPath.StartsWith(subnet, StringComparison.OrdinalIgnoreCase);
+
+            var everyone = Ordered(_graph.Vertices.Select(id => VertexFor(id, byId))).Where(InSubnet).ToList();
+
+            var reachable = tree.Order
+                .Select(id => VertexFor(id, byId))
+                .Where(InSubnet)
+                .Select(v => new ReachableNode(v.Id, v.Name, v.DeploymentPath, tree.Hops[v.Id]))
+                .ToList();
+
+            return new ReachabilityReport(
+                from,
+                subnet,
+                reachable,
+                Down: everyone.Where(v => down.Contains(v.Id)).ToList(),
+                Stranded: everyone.Where(v => !down.Contains(v.Id) && !tree.Reached(v.Id)).ToList(),
+                tree.Order);
+        }
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    private MeshVertex VertexFor(string id, IReadOnlyDictionary<string, SensorRegistration> byId)
+        => byId.TryGetValue(id, out var s)
+            ? new MeshVertex(id, s.DisplayName, s.DeploymentPath, false, _graph.DegreeOf(id))
+            : new MeshVertex(id, "Central gateway", GatewayPath, true, _graph.DegreeOf(id));
+
+    // Gateway first, then nodes grouped by where they are deployed.
+    private static IEnumerable<MeshVertex> Ordered(IEnumerable<MeshVertex> vertices)
+        => vertices.OrderByDescending(v => v.IsGateway).ThenBy(v => v.DeploymentPath).ThenBy(v => v.Name);
     //----------------------------------------------------------------------------------------------------------------------//
     // Caller holds _gate.
     private void Sync(IReadOnlyCollection<SensorRegistration> sensors)

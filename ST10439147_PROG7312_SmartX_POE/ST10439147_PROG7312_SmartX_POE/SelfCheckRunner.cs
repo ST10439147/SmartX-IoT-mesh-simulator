@@ -372,6 +372,25 @@ internal static class SelfCheckRunner
         Assert(view.Links.All(l => l.From != south.Id && l.To != south.Id), "a deleted node's links should go with it");
 
         log.Add("mesh network: reported links kept, unreported nodes auto-linked by location, deletes leave no dangling links");
+
+        // Reachability. What is left: GW - north - vent, and GW - tank. Take north down and
+        // the vent, whose only link home ran through north, is stranded.
+        var down = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { north.Id };
+        var report = mesh.Reachability(MeshGraph.GatewayId, down)!;
+
+        Assert(report.Reachable.Select(r => r.Id).SequenceEqual([MeshGraph.GatewayId, tank.Id]), "only the gateway and the tank should still be reachable");
+        Assert(report.Down.Single().Id == north.Id, "the down node should be listed as down");
+        Assert(report.Stranded.Single().Id == vent.Id, "the vent only reached home through north, so it should be stranded");
+
+        // The subnet filter narrows the lists, not the search.
+        var zone1 = mesh.Reachability(MeshGraph.GatewayId, new HashSet<string>(), subnet: "facility a/zone 1")!;
+        Assert(zone1.Reachable.Select(r => r.Id).Order().SequenceEqual(new[] { north.Id, vent.Id }.Order()),
+            "a Zone 1 subnet report should list only Zone 1 nodes");
+        Assert(zone1.Reachable.Single(r => r.Id == vent.Id).Hops == 2, "hops should still be counted from the gateway, across the whole mesh");
+
+        Assert(mesh.Reachability("not-a-node", down) is null, "an unknown starting node should give no report");
+
+        log.Add("mesh reachability: down and stranded nodes separated, subnet narrows the report not the search");
         return log;
     }
     //----------------------------------------------------------------------------------------------------------------------//

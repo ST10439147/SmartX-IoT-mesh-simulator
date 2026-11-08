@@ -511,6 +511,29 @@ api.MapGet("/topology", (TelemetryStore store) => store.Topology);
 // link once, with its RSSI and routing cost. This is the graph BFS and the MST run over.
 api.MapGet("/mesh", (MeshNetwork mesh) => mesh.View());
 
+// BFS over the mesh from the gateway (or any node, via `from`): which nodes it can reach and
+// in how many hops, which are down, and which are stranded - alive, but cut off because
+// every path they had ran through a down node.
+// "Down" is the live disconnect HashSet from Part 2 (silent for 3x the publish interval).
+// `without` adds nodes to treat as down for this one query, a what-if that needs no real
+// outage: ?without=A4:CF:12:9B:05:12,DC:A6:32:77:11:02
+// `subnet` narrows the report to one deployment area: ?subnet=Facility A/Zone 1
+api.MapGet("/mesh/reachability", (
+    MeshNetwork mesh,
+    AnomalyEngine anomalies,
+    [FromQuery] string? from,
+    [FromQuery] string? subnet,
+    [FromQuery] string? without) =>
+{
+    var down = anomalies.Disconnected
+        .Concat((without ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        .Select(TelemetryStore.KeyFor)
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    var report = mesh.Reachability(from ?? MeshGraph.GatewayId, down, string.IsNullOrWhiteSpace(subnet) ? null : subnet.Trim());
+    return report is null ? Results.NotFound(new { error = $"'{from}' is not a node on the mesh." }) : Results.Ok(report);
+});
+
 api.MapPost("/topology/validate", (DeploymentNode root) => TopologyValidator.Validate(root));
 
 // Proves the depth guard through the API. System.Text.Json refuses to parse a body this

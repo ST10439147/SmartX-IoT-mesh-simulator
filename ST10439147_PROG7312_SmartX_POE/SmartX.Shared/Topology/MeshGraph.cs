@@ -103,6 +103,58 @@ public sealed class MeshGraph
         => _adjacency.Values.SelectMany(l => l).Where(l => string.Compare(l.From, l.To, StringComparison.OrdinalIgnoreCase) < 0);
 
     /// <summary>
+    /// Breadth-first search from <paramref name="root"/>: every vertex it can reach, in the
+    /// order BFS discovers them, with its hop count and the neighbour it was reached from.
+    ///
+    /// <para>Nodes in <paramref name="down"/> are treated as gone: never visited and never
+    /// passed through. A dead node cannot relay a packet, so anything that could only be
+    /// reached through it drops out of the result - that is how the mesh finds the nodes a
+    /// failure has cut off.</para>
+    ///
+    /// <para><b>Why BFS.</b> It explores in rings: everything 1 hop away, then 2 hops, and so
+    /// on. So the first time it reaches a node is along a path with the fewest hops - the
+    /// hop count is exact, and the <c>Parent</c> chain is a shortest-hop route back to the
+    /// root. Each vertex is queued once and each link looked at twice (once from each end):
+    /// O(V + E).</para>
+    /// </summary>
+    // Reference: Cormen, T. H. et al. (2022). Introduction to Algorithms, 4th ed., s. 20.2 "Breadth-first search". MIT Press.
+    // Reference: Microsoft. Queue<T> Class. https://learn.microsoft.com/dotnet/api/system.collections.generic.queue-1
+    public BfsTree BreadthFirst(string root, IReadOnlySet<string>? down = null)
+    {
+        var order = new List<string>();
+        var hops = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var parent = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        // Vertex ids ignore case, so the down set must too, whatever comparer the caller built it with.
+        var blocked = new HashSet<string>(down ?? new HashSet<string>(), StringComparer.OrdinalIgnoreCase);
+
+        if (!_adjacency.ContainsKey(root) || blocked.Contains(root))
+            return new BfsTree(root, order, hops, parent);
+
+        // `hops` doubles as the visited set: a node gets its hop count the moment it is
+        // queued, so it can never be queued twice.
+        var queue = new Queue<string>();
+        queue.Enqueue(root);
+        hops[root] = 0;
+
+        while (queue.TryDequeue(out var current))
+        {
+            order.Add(current);
+
+            foreach (var link in _adjacency[current])
+            {
+                if (hops.ContainsKey(link.To) || blocked.Contains(link.To)) continue;
+
+                hops[link.To] = hops[current] + 1;
+                parent[link.To] = current;
+                queue.Enqueue(link.To);
+            }
+        }
+
+        return new BfsTree(root, order, hops, parent);
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    /// <summary>
     /// Relative transmit energy for one packet over a link with this RSSI. dBm is a log
     /// scale - every 10 dB weaker means ten times less power arrives - so the radio has to
     /// put out ten times more to be heard reliably. A -50 dBm link costs 1.0, -60 costs 10,
@@ -113,6 +165,37 @@ public sealed class MeshGraph
     public static double CostOf(int rssiDbm) => Math.Round(Math.Pow(10, (ReferenceRssi - rssiDbm) / 10.0), 2);
 }
 //----------------------------------------------------------------------------------------------------------------------//
+/// <summary>
+/// What a breadth-first search found. <see cref="Order"/> is the discovery order,
+/// <see cref="Hops"/> the fewest hops from the root to each vertex, and <see cref="Parent"/>
+/// the neighbour each vertex was first reached from (the root has none).
+/// </summary>
+public sealed record BfsTree(
+    string Root,
+    IReadOnlyList<string> Order,
+    IReadOnlyDictionary<string, int> Hops,
+    IReadOnlyDictionary<string, string> Parent)
+{
+    public bool Reached(string id) => Hops.ContainsKey(id);
+}
+
+/// <summary>A node the search reached, and how many hops it sits from where the search began.</summary>
+public sealed record ReachableNode(string Id, string Name, string DeploymentPath, int Hops);
+
+/// <summary>
+/// Which nodes can still talk to <see cref="From"/>. <see cref="Down"/> have gone silent;
+/// <see cref="Stranded"/> are still running but every path they had went through a down
+/// node, so nothing they send can get through. <see cref="Subnet"/>, when set, is the
+/// deployment-path prefix the lists were narrowed to.
+/// </summary>
+public sealed record ReachabilityReport(
+    string From,
+    string? Subnet,
+    IReadOnlyList<ReachableNode> Reachable,
+    IReadOnlyList<MeshVertex> Down,
+    IReadOnlyList<MeshVertex> Stranded,
+    IReadOnlyList<string> VisitOrder);
+
 /// <summary>A vertex as the API shows it: the node plus what the dashboard needs to draw it.</summary>
 public sealed record MeshVertex(string Id, string Name, string DeploymentPath, bool IsGateway, int Degree);
 

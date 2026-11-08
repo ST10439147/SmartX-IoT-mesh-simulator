@@ -31,8 +31,51 @@ public static class SelfCheck
         EverySensorIsASpecificAgriculturalDevice(log);
         AvlTreeStaysBalancedAndAnswersRanges(log);
         MeshGraphIsUndirectedAndWeighted(log);
+        BreadthFirstFindsReachableAndStrandedNodes(log);
 
         return log;
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    private static void BreadthFirstFindsReachableAndStrandedNodes(List<string> log)
+    {
+        //   GW - A - B - D - E        B has two ways home (via A or via C);
+        //    \      /                 D and E only have one: through B.
+        //      C --
+        const string gw = MeshGraph.GatewayId;
+        var graph = new MeshGraph();
+        graph.Connect(gw, "A", -50);
+        graph.Connect(gw, "C", -50);
+        graph.Connect("A", "B", -50);
+        graph.Connect("C", "B", -50);
+        graph.Connect("B", "D", -50);
+        graph.Connect("D", "E", -50);
+        graph.AddVertex("F");   // never linked to anything
+
+        var all = graph.BreadthFirst(gw);
+        Assert(all.Order.Count == 6 && !all.Reached("F"), "BFS should reach the 6 linked vertices and not the island");
+        Assert(all.Hops["A"] == 1 && all.Hops["C"] == 1 && all.Hops["B"] == 2 && all.Hops["D"] == 3 && all.Hops["E"] == 4,
+            "hop counts should be the fewest hops from the gateway");
+        Assert(all.Order.Select(id => all.Hops[id]).Zip(all.Order.Skip(1).Select(id => all.Hops[id])).All(p => p.First <= p.Second),
+            "BFS should discover nodes in rings: never a 3-hop node before a 2-hop one");
+        Assert(!all.Parent.ContainsKey(gw) && all.Parent["E"] == "D" && all.Parent["D"] == "B", "each node should point back one hop towards the root");
+
+        // A goes down: B is still reachable via C, at the same hop count.
+        var withoutA = graph.BreadthFirst(gw, new HashSet<string> { "A" });
+        Assert(!withoutA.Reached("A") && withoutA.Reached("E"), "losing A should strand nobody - B has a second way home");
+        Assert(withoutA.Parent["B"] == "C", "with A down, B should be reached through C");
+
+        // B goes down: D and E only ever had B, so they are cut off.
+        var withoutB = graph.BreadthFirst(gw, new HashSet<string> { "b" });   // any letter case
+        Assert(withoutB.Reached("A") && withoutB.Reached("C") && !withoutB.Reached("D") && !withoutB.Reached("E"),
+            "losing B should strand D and E, which have no other path");
+        Assert(withoutB.Order.Count == 3, "a down node must not be visited or passed through");
+
+        // A search can start anywhere, and a down or unknown root reaches nothing.
+        Assert(graph.BreadthFirst("E").Hops[gw] == 4, "BFS from a node should find the gateway 4 hops away");
+        Assert(graph.BreadthFirst(gw, new HashSet<string> { gw }).Order.Count == 0, "a down root reaches nothing");
+        Assert(graph.BreadthFirst("nope").Order.Count == 0, "an unknown root reaches nothing");
+
+        log.Add("bfs: exact hop counts, ring order, reroutes around a down node, strands what only it connected");
     }
     //----------------------------------------------------------------------------------------------------------------------//
     private static void MeshGraphIsUndirectedAndWeighted(List<string> log)
