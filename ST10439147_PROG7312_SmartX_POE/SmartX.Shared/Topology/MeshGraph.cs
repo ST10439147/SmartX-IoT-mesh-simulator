@@ -1,3 +1,5 @@
+using SmartX.Shared.Telemetry;
+
 namespace SmartX.Shared.Topology;
 
 /// <summary>
@@ -159,6 +161,68 @@ public sealed class MeshGraph
     }
     //----------------------------------------------------------------------------------------------------------------------//
     /// <summary>
+    /// Prim's algorithm: the minimum spanning tree of everything reachable from
+    /// <paramref name="root"/>, skipping nodes in <paramref name="down"/>. Of all the ways
+    /// to connect those nodes with no loops, it is the set of links whose total
+    /// <see cref="MeshLink.Cost"/> - total transmit energy - is lowest.
+    ///
+    /// <para><b>How it grows.</b> Start with just the root. Every link from the tree to a
+    /// node outside it goes on a <see cref="MinHeap{TElement,TPriority}"/> keyed by cost. Pop
+    /// the cheapest: if its far end is already in the tree it would close a loop, so drop it;
+    /// otherwise take the link, add its far end, and push that node's links. Repeat until
+    /// the heap is empty. Taking the cheapest crossing link is always safe (the "cut
+    /// property"), so the greedy choice ends up globally optimal.</para>
+    ///
+    /// <para><b>Lazy deletion.</b> A node can be on the heap several times through different
+    /// links. Rather than finding and updating the old entry (a heap cannot search), the
+    /// stale ones are just skipped when they come out. The heap holds at most E entries, so
+    /// the whole run is O(E log E).</para>
+    ///
+    /// <para>Each tree link is returned pointing away from the root (<c>From</c> is the
+    /// parent), so the result is a routing tree rooted at the gateway.</para>
+    /// </summary>
+    // Reference: Prim, R. C. (1957). Shortest connection networks and some generalizations. Bell System Technical Journal, 36(6), 1389-1401.
+    // Reference: Cormen, T. H. et al. (2022). Introduction to Algorithms, 4th ed., s. 21.2 "The algorithms of Kruskal and Prim". MIT Press.
+    public MstTree MinimumSpanningTree(string root, IReadOnlySet<string>? down = null)
+    {
+        var blocked = new HashSet<string>(down ?? new HashSet<string>(), StringComparer.OrdinalIgnoreCase);
+        var order = new List<string>();
+        var edges = new List<MeshLink>();
+        var parent = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        if (!_adjacency.ContainsKey(root) || blocked.Contains(root))
+            return new MstTree(root, order, edges, parent, 0);
+
+        var inTree = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // Priority is (cost, push order): equal-cost links come out in the order they were
+        // found, so the same mesh always gives the same tree.
+        var heap = new MinHeap<MeshLink, (double Cost, long Sequence)>();
+        long sequence = 0;
+
+        void Take(string id)
+        {
+            inTree.Add(id);
+            order.Add(id);
+            foreach (var link in _adjacency[id])
+                if (!inTree.Contains(link.To) && !blocked.Contains(link.To))
+                    heap.Push(link, (link.Cost, sequence++));
+        }
+
+        Take(root);
+
+        while (heap.TryPop(out var cheapest, out _))
+        {
+            if (inTree.Contains(cheapest.To)) continue;   // stale: would close a loop
+
+            edges.Add(cheapest);
+            parent[cheapest.To] = cheapest.From;
+            Take(cheapest.To);
+        }
+
+        return new MstTree(root, order, edges, parent, Math.Round(edges.Sum(e => e.Cost), 2));
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    /// <summary>
     /// Relative transmit energy for one packet over a link with this RSSI. dBm is a log
     /// scale - every 10 dB weaker means ten times less power arrives - so the radio has to
     /// put out ten times more to be heard reliably. A -50 dBm link costs 1.0, -60 costs 10,
@@ -197,6 +261,40 @@ public sealed record BfsTree(
         return path;
     }
 }
+
+/// <summary>
+/// What Prim's algorithm built. <see cref="Order"/> is the order vertices joined the tree,
+/// <see cref="Edges"/> the chosen links (each pointing from parent to child, in the order
+/// they were taken), <see cref="Parent"/> each vertex's parent towards the root, and
+/// <see cref="TotalCost"/> the energy of every chosen link added up.
+/// </summary>
+public sealed record MstTree(
+    string Root,
+    IReadOnlyList<string> Order,
+    IReadOnlyList<MeshLink> Edges,
+    IReadOnlyDictionary<string, string> Parent,
+    double TotalCost)
+{
+    /// <summary>True if <paramref name="id"/> is in the tree: the root, or any vertex with a parent.</summary>
+    public bool Spans(string id) => Parent.ContainsKey(id) || (Order.Count > 0 && string.Equals(id, Root, StringComparison.OrdinalIgnoreCase));
+}
+
+/// <summary>
+/// The minimum spanning tree as the API shows it, with what it is being compared against.
+/// <see cref="BfsTreeCost"/> is the energy of the fewest-hop routing tree from section 3;
+/// <see cref="MeshCost"/> is every link in the mesh. <see cref="Down"/> were left out of the
+/// tree; <see cref="Unreached"/> are up but could not be connected to the root at all.
+/// </summary>
+public sealed record MstReport(
+    string Root,
+    IReadOnlyList<MeshVertex> Vertices,
+    IReadOnlyList<MeshLink> Edges,
+    double TotalCost,
+    double BfsTreeCost,
+    double MeshCost,
+    int MeshLinks,
+    IReadOnlyList<MeshVertex> Down,
+    IReadOnlyList<MeshVertex> Unreached);
 
 /// <summary>A node the search reached, and how many hops it sits from where the search began.</summary>
 public sealed record ReachableNode(string Id, string Name, string DeploymentPath, int Hops);

@@ -86,6 +86,25 @@ public sealed class GatewayClient(HttpClient http)
     }
 
     /// <summary>
+    /// The live mesh's minimum spanning tree (Prim's, from the gateway), priced against the
+    /// BFS tree and the full mesh, with <paramref name="without"/> treated as down. Null if the gateway could not be reached.
+    /// </summary>
+    public async Task<MstReport?> GetMstAsync(IEnumerable<string>? without = null, CancellationToken ct = default)
+    {
+        var url = "api/mesh/mst";
+        if (without?.Any() == true) url += $"?without={Uri.EscapeDataString(string.Join(',', without))}";
+
+        try
+        {
+            return await http.GetFromJsonAsync<MstReport>(url, SmartXJson.Options, ct);
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
     /// One node's usual and current route to the gateway, by MAC or id, with
     /// <paramref name="without"/> treated as down. Null if the gateway could not be reached or the node is unknown.
     /// </summary>

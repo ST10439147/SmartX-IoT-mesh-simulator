@@ -540,6 +540,13 @@ api.MapGet("/mesh/route/{id}", (string id, MeshNetwork mesh, AnomalyEngine anoma
     return report is null ? Results.NotFound(new { error = $"'{id}' is not a node on the mesh." }) : Results.Ok(report);
 });
 
+// Prim's minimum spanning tree of the live mesh, grown from the gateway: the links that keep
+// every reachable node connected for the least total transmit energy. The report prices it
+// against the fewest-hop BFS tree and against leaving every link active.
+// Down nodes are left out, so the tree re-forms around an outage: ?without=DC:A6:32:77:11:02
+api.MapGet("/mesh/mst", (MeshNetwork mesh, AnomalyEngine anomalies, [FromQuery] string? without) =>
+    mesh.Mst(DownSet(anomalies, without)));
+
 // The nodes the mesh endpoints treat as down: the live disconnect HashSet from Part 2,
 // plus any comma-separated MACs passed in `without` for a what-if.
 static HashSet<string> DownSet(AnomalyEngine anomalies, string? without)

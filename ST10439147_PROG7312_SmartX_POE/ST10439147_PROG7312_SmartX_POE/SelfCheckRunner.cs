@@ -433,6 +433,21 @@ internal static class SelfCheckRunner
         Assert(mesh.Route(MeshGraph.GatewayId, Down()) is null && mesh.Route("nope", Down()) is null, "the gateway and unknown ids have no route");
 
         log.Add("mesh routes: traced by MAC, heal around a down node with a new next hop, stranded nodes name their repair");
+
+        // MST report on the same mesh: GW-A (1), A-B (1) and B-D (3.16) are the cheap links;
+        // C has two links, GW-C and C-B, both -60 dBm (cost 10), and joins through one of them.
+        // The other is the one link the MST leaves out.
+        var tree = mesh.Mst(Down());
+        Assert(tree.Vertices.Count == 5 && tree.Edges.Count == 4 && tree.Down.Count == 0 && tree.Unreached.Count == 0, "all five vertices should be spanned by four links");
+        Assert(tree.TotalCost == Math.Round(1 + 10 + 1 + MeshGraph.CostOf(-55), 2), $"MST should be GW-A + GW-C + A-B + B-D, got {tree.TotalCost}");
+        Assert(tree.MeshLinks == 5 && tree.MeshCost == Math.Round(tree.TotalCost + 10, 2), "the full mesh adds the C-B link on top");
+        Assert(tree.BfsTreeCost >= tree.TotalCost, "no routing tree can cost less than the MST");
+
+        var withoutB = mesh.Mst(Down(b.ToLowerInvariant()));
+        Assert(withoutB.Down.Single().Id == b && withoutB.Unreached.Single().Id == d, "with B down, D cannot be spanned");
+        Assert(withoutB.Edges.Count == 2 && withoutB.MeshLinks == 2, "only GW-A and GW-C are left live");
+
+        log.Add("mesh mst report: spans the live mesh, priced against the bfs tree and the full mesh, re-forms around down nodes");
         return log;
     }
     //----------------------------------------------------------------------------------------------------------------------//

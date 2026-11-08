@@ -98,6 +98,49 @@ public sealed class MeshNetwork(TelemetryStore store)
     }
     //----------------------------------------------------------------------------------------------------------------------//
     /// <summary>
+    /// The minimum spanning tree of the live mesh, grown by Prim's from the gateway with
+    /// the down nodes taken out - the set of links that keeps every reachable node
+    /// connected for the least total transmit energy.
+    ///
+    /// <para>To show what that buys, the report also prices two alternatives over the same
+    /// live nodes: the fewest-hop routing tree BFS builds (section 3), and leaving every
+    /// link in the mesh active.</para>
+    /// </summary>
+    public MstReport Mst(IReadOnlySet<string> down)
+    {
+        var sensors = store.Sensors;
+        var byId = sensors.ToDictionary(s => s.Id, StringComparer.OrdinalIgnoreCase);
+        down = IgnoringCase(down);
+
+        lock (_gate)
+        {
+            Sync(sensors);
+
+            var mst = _graph.MinimumSpanningTree(MeshGraph.GatewayId, down);
+
+            // The BFS tree's links are each node's link to its BFS parent.
+            var bfs = _graph.BreadthFirst(MeshGraph.GatewayId, down);
+            var bfsCost = bfs.Parent.Sum(p => _graph.LinkBetween(p.Key, p.Value)!.Cost);
+
+            // Every link between two live nodes.
+            var live = _graph.Links.Where(l => !down.Contains(l.From) && !down.Contains(l.To)).ToList();
+
+            var everyone = Ordered(_graph.Vertices.Select(id => VertexFor(id, byId))).ToList();
+
+            return new MstReport(
+                MeshGraph.GatewayId,
+                mst.Order.Select(id => VertexFor(id, byId)).ToList(),
+                mst.Edges,
+                mst.TotalCost,
+                Math.Round(bfsCost, 2),
+                Math.Round(live.Sum(l => l.Cost), 2),
+                live.Count,
+                Down: everyone.Where(v => down.Contains(v.Id)).ToList(),
+                Unreached: everyone.Where(v => !down.Contains(v.Id) && !mst.Spans(v.Id)).ToList());
+        }
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    /// <summary>
     /// Traces one node's route to the gateway by MAC or id, and what an outage has done to it.
     /// Null if the node is not on the mesh (or is the gateway itself).
     ///

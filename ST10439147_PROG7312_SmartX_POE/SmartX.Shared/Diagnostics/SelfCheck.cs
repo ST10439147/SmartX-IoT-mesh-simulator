@@ -33,8 +33,79 @@ public static class SelfCheck
         MeshGraphIsUndirectedAndWeighted(log);
         BreadthFirstFindsReachableAndStrandedNodes(log);
         MinHeapAlwaysPopsTheSmallest(log);
+        PrimsMinimumSpanningTreeMatchesKruskal(log);
 
         return log;
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    // Reference: Kruskal, J. B. (1956). On the shortest spanning subtree of a graph and the traveling salesman problem. Proc. AMS, 7(1), 48-50.
+    private static void PrimsMinimumSpanningTreeMatchesKruskal(List<string> log)
+    {
+        const string gw = MeshGraph.GatewayId;
+
+        // A triangle: the direct GW-B link is weak (cost 100), going through A costs 1 + 1.
+        // BFS would take the direct link because it is fewer hops; the MST must not.
+        var triangle = new MeshGraph();
+        triangle.Connect(gw, "A", -50);
+        triangle.Connect("A", "B", -50);
+        triangle.Connect(gw, "B", -70);
+        triangle.Connect("B", "D", -55);
+
+        var mst = triangle.MinimumSpanningTree(gw);
+        Assert(mst.TotalCost == Math.Round(1 + 1 + MeshGraph.CostOf(-55), 2), $"MST should cost 1 + 1 + 3.16, got {mst.TotalCost}");
+        Assert(mst.Edges.Count == 3 && mst.Edges.All(e => !(e.From == gw && e.To == "B")), "the expensive direct GW-B link should be left out");
+        Assert(mst.Parent["B"] == "A" && mst.Parent["D"] == "B" && mst.Order[0] == gw, "the tree should be rooted at the gateway with B hanging off A");
+        Assert(mst.Edges.All(e => mst.Parent[e.To] == e.From), "every tree link should point from parent to child");
+        Assert(triangle.BreadthFirst(gw).Parent["B"] == gw, "for contrast, BFS should have taken the 1-hop direct link");
+
+        // Down nodes are left out; what only they connected cannot be spanned.
+        var withoutB = triangle.MinimumSpanningTree(gw, new HashSet<string> { "b" });
+        Assert(withoutB.Spans("A") && !withoutB.Spans("B") && !withoutB.Spans("D") && withoutB.TotalCost == 1, "with B down the tree is just GW-A");
+        Assert(triangle.MinimumSpanningTree(gw, new HashSet<string> { gw }).Order.Count == 0, "a down root spans nothing");
+
+        // Random meshes: Prim's total must equal an independent Kruskal's on the same component.
+        var random = new Random(7312);
+        for (var round = 0; round < 25; round++)
+        {
+            var graph = new MeshGraph();
+            var nodes = Enumerable.Range(0, 40).Select(i => $"N{i}").Prepend(gw).ToList();
+            for (var e = 0; e < 120; e++)
+            {
+                var a = nodes[random.Next(nodes.Count)];
+                var b = nodes[random.Next(nodes.Count)];
+                if (a != b) graph.Connect(a, b, -random.Next(40, 86));
+            }
+
+            var down = new HashSet<string> { nodes[1 + random.Next(40)], nodes[1 + random.Next(40)] };
+            var prim = graph.MinimumSpanningTree(gw, down);
+            var component = graph.BreadthFirst(gw, down).Order.ToHashSet();
+
+            Assert(prim.Order.ToHashSet().SetEquals(component), "Prim's should span exactly the nodes BFS can reach");
+            Assert(prim.Edges.Count == component.Count - 1, "a spanning tree of n nodes has n - 1 links");
+            Assert(Math.Round(prim.TotalCost, 2) == Math.Round(Kruskal(graph, component), 2),
+                $"Prim's ({prim.TotalCost}) and Kruskal's should agree on the minimum cost, round {round}");
+        }
+
+        log.Add("prim's mst: skips the costly direct link BFS takes, heals around down nodes, matches kruskal's on 25 random meshes");
+    }
+
+    // Kruskal's with union-find, as an independent answer to check Prim's against: sort every
+    // link by cost, keep each one that joins two separate groups.
+    private static double Kruskal(MeshGraph graph, HashSet<string> component)
+    {
+        var group = component.ToDictionary(v => v, v => v);
+        string Find(string v) => group[v] == v ? v : group[v] = Find(group[v]);
+
+        var total = 0.0;
+        foreach (var link in graph.Links.Where(l => component.Contains(l.From) && component.Contains(l.To)).OrderBy(l => l.Cost))
+        {
+            var (a, b) = (Find(link.From), Find(link.To));
+            if (a == b) continue;
+            group[a] = b;
+            total += link.Cost;
+        }
+
+        return total;
     }
     //----------------------------------------------------------------------------------------------------------------------//
     // Reference: Cormen, T. H. et al. (2022). Introduction to Algorithms, 4th ed., ch. 6. MIT Press.
