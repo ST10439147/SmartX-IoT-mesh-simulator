@@ -1,0 +1,197 @@
+@*
+    The radio mesh drawn as a graph: every ESP32 node a vertex, every radio link an edge.
+
+    Layout: one column per deployment area (pump house, roof array, greenhouse, field beds),
+    ordered by how early that area joins the minimum spanning tree - so reading left to right
+    is reading outward from the gateway - and within a column, nodes in the order they joined
+    the tree, so tree links mostly join neighbouring rows. Both orders are fixed the first time
+    they are seen, so the map does not reshuffle when a node drops and the tree re-forms.
+
+    Encoding follows the console's anomaly-first rule: every link is drawn in one muted line,
+    and only what matters gets colour - the MST links packets actually travel (info blue),
+    down nodes (critical red, crossed out) and stranded nodes (warning amber, dashed).
+    Hovering a node or link shows its MAC, RSSI and energy cost.
+
+    Inline SVG, no graph library, for the same reason as the sparkline: a few circles and
+    lines are cheaper to write than a JS dependency is to load.
+*@
+@using System.Globalization
+
+@if (Mesh is null)
+{
+    <p class="hint">Loading the mesh...</p>
+}
+else
+{
+    <div class="scroll-x">
+        <svg class="mesh-map" viewBox="0 0 @N(_width) @N(_height)" role="img"
+             aria-label="Mesh map: @(Mesh.Vertices.Count - 1) nodes and @Mesh.Links.Count radio links. @_down.Count down, @_stranded.Count stranded.">
+
+            @* Wrapped in <g>: Razor reads a bare <text> inside a code block as its own text tag. *@
+            <g>
+                @foreach (var column in _columns)
+                {
+                    <g><text class="mesh-col" x="@N(column.X)" y="18">@column.Title</text></g>
+                }
+            </g>
+
+            @* Links first so the nodes sit on top of them. *@
+            @foreach (var link in Mesh.Links)
+            {
+                if (!_position.TryGetValue(link.From, out var a) || !_position.TryGetValue(link.To, out var b)) continue;
+
+                <path class="mesh-link @LinkClass(link)" d="@LinkPath(a, b)">
+                    <title>@Name(link.From) - @Name(link.To): @link.RssiDbm dBm, cost @link.Cost.ToString("0.##", CultureInfo.InvariantCulture)@(InTree(link) ? " (routing tree)" : "")</title>
+                </path>
+            }
+
+            @foreach (var vertex in Mesh.Vertices)
+            {
+                if (!_position.TryGetValue(vertex.Id, out var p)) continue;
+                var (first, second) = SplitName(vertex.Name);
+
+                <g class="mesh-node @NodeClass(vertex)" transform="translate(@N(p.X) @N(p.Y))">
+                    <title>@vertex.Name (@vertex.Id) - @vertex.DeploymentPath, hears @vertex.Degree node(s)@StateSuffix(vertex)</title>
+
+                    @if (vertex.IsGateway)
+                    {
+                        <rect x="-15" y="-15" width="30" height="30" rx="6" />
+                    }
+                    else
+                    {
+                        <circle r="13" />
+                        @if (_down.Contains(vertex.Id))
+                        {
+                            <path class="mesh-x" d="M -6 -6 L 6 6 M 6 -6 L -6 6" />
+                        }
+                    }
+
+                    <text y="29">@first</text>
+                    @if (second.Length > 0)
+                    {
+                        <g><text y="41">@second</text></g>
+                    }
+                    <text class="mesh-mac" y="@(second.Length > 0 ? 53 : 41)">@ShortId(vertex)</text>
+                </g>
+            }
+        </svg>
+    </div>
+
+    <ul class="mesh-legend">
+        <li><span class="swatch tree"></span>Routing tree (MST): the links packets travel</li>
+        <li><span class="swatch link"></span>Other radio link (backup path)</li>
+        <li><span class="swatch down"></span>Down: silent</li>
+        <li><span class="swatch stranded"></span>Stranded: running, but cut off</li>
+    </ul>
+}
+
+@code {
+    /// <summary>Every vertex and link of the mesh.</summary>
+    [Parameter, EditorRequired] public MeshView? Mesh { get; set; }
+
+    /// <summary>The live MST: which links to highlight, and which nodes are down or stranded.</summary>
+    [Parameter] public MstReport? Mst { get; set; }
+
+    private const string GatewayColumn = "\u0000gateway";
+    private const double ColumnWidth = 150, RowHeight = 78, Top = 52, Side = 75;
+
+    private sealed record Column(string Title, double X, List<MeshVertex> Nodes);
+
+    // Remembered across refreshes so a failure does not move areas or nodes around the map.
+    private readonly List<string> _columnOrder = [];
+    private readonly List<string> _rowOrder = [];
+    private readonly Dictionary<string, (double X, double Y)> _position = new(StringComparer.OrdinalIgnoreCase);
+    private List<Column> _columns = [];
+    private HashSet<string> _tree = [], _down = [], _stranded = [];
+    private Dictionary<string, string> _names = [];
+    private double _width, _height;
+
+    protected override void OnParametersSet()
+    {
+        if (Mesh is null) return;
+
+        // Gateway first, then areas in the order the MST reaches them, and within an area, nodes
+        // in the order they joined the tree - so most tree links join neighbouring rows and stay
+        // short and straight. Anything new goes on the end.
+        foreach (var vertex in (Mst?.Vertices ?? []).Concat(Mesh.Vertices))
+        {
+            var key = ColumnKey(vertex);
+            if (!_columnOrder.Contains(key)) _columnOrder.Add(key);
+            if (!_rowOrder.Contains(vertex.Id)) _rowOrder.Add(vertex.Id);
+        }
+
+        var byColumn = Mesh.Vertices.GroupBy(ColumnKey).ToDictionary(g => g.Key, g => g.OrderBy(v => _rowOrder.IndexOf(v.Id)).ToList());
+
+        _columns = _columnOrder
+            .Where(byColumn.ContainsKey)
+            .Select((key, i) => new Column(TitleFor(key), Side + i * ColumnWidth, byColumn[key]))
+            .ToList();
+
+        _position.Clear();
+        foreach (var column in _columns)
+            for (var row = 0; row < column.Nodes.Count; row++)
+                _position[column.Nodes[row].Id] = (column.X, Top + row * RowHeight);
+
+        _width = Math.Max(1, _columns.Count) * ColumnWidth;
+        _height = Top + Math.Max(1, _columns.Max(c => (int?)c.Nodes.Count) ?? 1) * RowHeight - 10;
+
+        _names = Mesh.Vertices.ToDictionary(v => v.Id, v => v.Name, StringComparer.OrdinalIgnoreCase);
+        _tree = (Mst?.Edges ?? []).Select(e => Key(e.From, e.To)).ToHashSet();
+        _down = (Mst?.Down ?? []).Select(v => v.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        _stranded = (Mst?.Unreached ?? []).Select(v => v.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static string ColumnKey(MeshVertex v) => v.IsGateway ? GatewayColumn : v.DeploymentPath;
+
+    // "Facility A/Zone 2/Sub-Zone C" -> "ZONE 2 · SUB-ZONE C"
+    private static string TitleFor(string key) => key == GatewayColumn
+        ? "GATEWAY"
+        : string.Join(" · ", key.Split('/').Skip(1)).ToUpperInvariant();
+
+    // A straight line, except between two nodes in the same column with others between them:
+    // a straight line there would run through those nodes and look like it connects to them,
+    // so it bows out sideways instead - further the more rows it spans, capped short of the next column.
+    private static string LinkPath((double X, double Y) a, (double X, double Y) b)
+    {
+        var rowsApart = Math.Abs(a.Y - b.Y) / RowHeight;
+        if (Math.Abs(a.X - b.X) > 1 || rowsApart < 1.5) return $"M {N(a.X)} {N(a.Y)} L {N(b.X)} {N(b.Y)}";
+
+        var bow = Math.Min(30 + 20 * rowsApart, 65);
+        return $"M {N(a.X)} {N(a.Y)} Q {N(a.X + bow * 2)} {N((a.Y + b.Y) / 2)} {N(b.X)} {N(b.Y)}";
+    }
+
+    private static string Key(string a, string b) => string.CompareOrdinal(a, b) < 0 ? $"{a}|{b}" : $"{b}|{a}";
+
+    private bool InTree(MeshLink link) => _tree.Contains(Key(link.From, link.To));
+
+    private string LinkClass(MeshLink link)
+        => _down.Contains(link.From) || _down.Contains(link.To) ? "dead"
+            : InTree(link) ? "tree"
+            : "";
+
+    private string NodeClass(MeshVertex v)
+        => v.IsGateway ? "gateway"
+            : _down.Contains(v.Id) ? "down"
+            : _stranded.Contains(v.Id) ? "stranded"
+            : "";
+
+    private string StateSuffix(MeshVertex v)
+        => _down.Contains(v.Id) ? " - DOWN" : _stranded.Contains(v.Id) ? " - STRANDED" : "";
+
+    private string Name(string id) => _names.GetValueOrDefault(id, id);
+
+    // The last two bytes of the MAC are enough to tell nodes apart on the map.
+    private static string ShortId(MeshVertex v) => v.IsGateway ? "uplink" : v.Id.Length > 5 ? v.Id[^5..] : v.Id;
+
+    // Two-word-per-line wrap at the space nearest the middle, so labels fit a column.
+    private static (string, string) SplitName(string name)
+    {
+        if (name.Length <= 14) return (name, "");
+        var middle = name.Length / 2;
+        var cut = Enumerable.Range(0, name.Length).Where(i => name[i] == ' ').OrderBy(i => Math.Abs(i - middle)).FirstOrDefault(-1);
+        return cut < 0 ? (name, "") : (name[..cut], name[(cut + 1)..]);
+    }
+
+    // SVG wants a dot for a decimal point, whatever the browser's locale.
+    private static string N(double value) => value.ToString("0.#", CultureInfo.InvariantCulture);
+}

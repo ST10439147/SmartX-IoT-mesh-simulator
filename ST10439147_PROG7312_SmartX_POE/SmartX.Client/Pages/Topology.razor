@@ -1,14 +1,179 @@
 @page "/topology"
+@using System.Globalization
+@implements IDisposable
+@inject GatewayClient Gateway
 
 <PageTitle>Mesh routing - Smart-X</PageTitle>
 
 <div class="page-head">
     <h1>Network topology &amp; mesh routing</h1>
     <p>
-        The mesh graph, MAC-based route tracing and historical telemetry queries land here.
+        The ESP32 mesh as a graph. Packets hop node to node along the minimum spanning tree (Prim's):
+        the links that keep every node connected for the least total transmit energy. When a node goes
+        silent the tree re-forms around it, and anything with no way left home is flagged as stranded.
     </p>
-    <div class="actions">
-        <a href="ingestion"><button>Ingestion</button></a>
-        <a href="commands"><button>Command stream</button></a>
+</div>
+
+@if (_error is not null)
+{
+    <div class="toast bad"><span>@_error</span></div>
+}
+
+<div class="stats" style="margin-bottom:1rem">
+    <div class="stat">
+        <div class="label">Nodes</div>
+        <div class="value">@(_mesh is null ? "-" : _mesh.Vertices.Count - 1)</div>
+    </div>
+    <div class="stat">
+        <div class="label">Radio links</div>
+        <div class="value">@(_mesh?.Links.Count.ToString() ?? "-")</div>
+    </div>
+    <div class="stat">
+        <div class="label">Down</div>
+        <div class="value @(_mst?.Down.Count > 0 ? "crit" : "ok")">@(_mst?.Down.Count ?? 0)</div>
+    </div>
+    <div class="stat">
+        <div class="label">Stranded</div>
+        <div class="value @(_mst?.Unreached.Count > 0 ? "warn" : "ok")">@(_mst?.Unreached.Count ?? 0)</div>
+    </div>
+    <div class="stat">
+        <div class="label">MST energy</div>
+        <div class="value">@Cost(_mst?.TotalCost)</div>
+    </div>
+    <div class="stat">
+        <div class="label">Fewest-hop tree</div>
+        <div class="value">@Cost(_mst?.BfsTreeCost)</div>
+    </div>
+    <div class="stat">
+        <div class="label">Energy saved</div>
+        <div class="value ok">@Saving</div>
     </div>
 </div>
+
+@* ------------------------------------------------------------ mesh map *@
+<section class="panel" style="margin-bottom:1rem">
+    <div class="panel-head">
+        <h2>Mesh map</h2>
+        <span class="count">@(_updated is null ? "connecting..." : $"updated {_updated.Value.ToLocalTime():HH:mm:ss}, every 5 s")</span>
+    </div>
+    <MeshMap Mesh="_mesh" Mst="_mst" />
+</section>
+
+@* ------------------------------------------------------------ the tree itself *@
+<section class="panel">
+    <div class="panel-head">
+        <h2>Routing tree</h2>
+        <span class="count">@(_mst?.Edges.Count ?? 0) of @(_mst?.MeshLinks ?? 0) live links kept</span>
+    </div>
+    <p>
+        The links Prim's algorithm chose, in the order it took them: each step adds the cheapest link from
+        the tree so far to a node not yet in it. Cost is relative transmit energy - every 10 dB weaker
+        signal costs ten times more.
+    </p>
+
+    @if (_mst is { Edges.Count: > 0 })
+    {
+        <div class="scroll-x">
+            <table class="context-table">
+                <thead>
+                    <tr><th>#</th><th>From</th><th>To</th><th>RSSI</th><th>Cost</th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var (edge, i) in _mst.Edges.Select((e, i) => (e, i + 1)))
+                    {
+                        <tr>
+                            <td>@i</td>
+                            <td>@Name(edge.From)</td>
+                            <td>@Name(edge.To)</td>
+                            <td>@edge.RssiDbm dBm</td>
+                            <td>@edge.Cost.ToString("0.##", CultureInfo.InvariantCulture)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+    else
+    {
+        <p class="hint">Waiting for the gateway.</p>
+    }
+</section>
+
+@code {
+    private static readonly TimeSpan Refresh = TimeSpan.FromSeconds(5);   // matches the gateway's silence sweep
+
+    private readonly CancellationTokenSource _cts = new();
+    private MeshView? _mesh;
+    private MstReport? _mst;
+    private DateTimeOffset? _updated;
+    private string? _error;
+    private Dictionary<string, string> _names = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Taken once: after Dispose the source is gone, but a captured token still reads as cancelled.
+        var token = _cts.Token;
+        await LoadAsync(token);
+        _ = PollAsync(token);
+    }
+
+    // Reference [41]: Microsoft. PeriodicTimer Class. Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/api/system.threading.periodictimer
+    private async Task PollAsync(CancellationToken token)
+    {
+        using var timer = new PeriodicTimer(Refresh);
+        try
+        {
+            while (await timer.WaitForNextTickAsync(token))
+            {
+                await LoadAsync(token);
+                StateHasChanged();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Page left.
+        }
+    }
+
+    private async Task LoadAsync(CancellationToken token)
+    {
+        try
+        {
+            // The two requests are independent, so send them together.
+            var mesh = Gateway.GetMeshAsync(token);
+            var mst = Gateway.GetMstAsync(ct: token);
+            var (meshView, tree) = (await mesh, await mst);
+
+            if (meshView is null || tree is null)
+            {
+                _error = "Gateway unreachable - showing the last mesh received.";
+                return;
+            }
+
+            _mesh = meshView;
+            _mst = tree;
+            _names = meshView.Vertices.ToDictionary(v => v.Id, v => v.Name, StringComparer.OrdinalIgnoreCase);
+            _updated = DateTimeOffset.UtcNow;
+            _error = null;
+        }
+        catch (OperationCanceledException)
+        {
+            // Page left mid-request.
+        }
+    }
+
+    private string Name(string id) => _names.GetValueOrDefault(id, id);
+
+    private static string Cost(double? value) => value?.ToString("0.0", CultureInfo.InvariantCulture) ?? "-";
+
+    private string Saving => _mst is { BfsTreeCost: > 0 }
+        ? (1 - _mst.TotalCost / _mst.BfsTreeCost).ToString("P0", CultureInfo.InvariantCulture)
+        : "-";
+
+    public void Dispose()
+    {
+        _cts.Cancel();
+        _cts.Dispose();
+    }
+}

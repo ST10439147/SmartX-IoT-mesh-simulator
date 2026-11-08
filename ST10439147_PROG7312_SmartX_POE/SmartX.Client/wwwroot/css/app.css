@@ -487,6 +487,35 @@ button.tiny { padding: .2rem .5rem; font-size: .75rem; }
 .tree-name { font-weight: 550; }
 .tree .meta { font-family: var(--mono); font-size: .72rem; color: var(--dim); }
 
+/* ---------------------------------------------------------------- mesh map */
+
+/* Scales down with the panel, but stops at a width where labels stay readable;
+   below that the panel scrolls sideways instead of the page. */
+.mesh-map { display: block; width: 100%; min-width: 640px; height: auto; }
+
+.mesh-col { fill: var(--dim); font: 600 10px var(--mono); letter-spacing: .08em; text-anchor: middle; }
+
+.mesh-link { fill: none; stroke: var(--line-strong); stroke-width: 1.2; }
+.mesh-link.tree { stroke: var(--info); stroke-width: 3; stroke-linecap: round; }
+.mesh-link.dead { stroke: var(--crit); stroke-width: 1.2; stroke-dasharray: 4 4; opacity: .55; }
+
+.mesh-node circle { fill: var(--panel-2); stroke: var(--normal); stroke-width: 2; }
+.mesh-node.gateway rect { fill: var(--accent); }
+.mesh-node.down circle { fill: rgba(255, 84, 112, .14); stroke: var(--crit); }
+.mesh-node.stranded circle { fill: rgba(240, 168, 57, .12); stroke: var(--warn); stroke-dasharray: 4 3; }
+.mesh-node .mesh-x { stroke: var(--crit); stroke-width: 2.2; stroke-linecap: round; }
+/* The stroke is painted first, in the panel colour, as a halo: links passing behind a label stay readable. */
+.mesh-node text { fill: var(--text); font: 10.5px var(--sans); text-anchor: middle; paint-order: stroke; stroke: var(--panel); stroke-width: 4px; stroke-linejoin: round; }
+.mesh-node text.mesh-mac { fill: var(--dim); font: 9px var(--mono); }
+.mesh-node.down text, .mesh-node.stranded text { fill: var(--muted); }
+
+.mesh-legend { list-style: none; padding: 0; margin: .9rem 0 0; display: flex; flex-wrap: wrap; gap: .4rem 1.2rem; font-size: .8rem; color: var(--muted); }
+.mesh-legend li { display: flex; align-items: center; gap: .45rem; }
+.mesh-legend .swatch { display: inline-block; width: 22px; height: 0; border-top: 3px solid var(--info); }
+.mesh-legend .swatch.link { border-top: 1.5px solid var(--line-strong); }
+.mesh-legend .swatch.down { width: 12px; height: 12px; border: 2px solid var(--crit); border-radius: 50%; background: rgba(255, 84, 112, .14); }
+.mesh-legend .swatch.stranded { width: 12px; height: 12px; border: 2px dashed var(--warn); border-radius: 50%; }
+
 /* ---------------------------------------------------------------- boot + errors */
 
 .loading-progress { position: fixed; inset: 0; margin: auto; width: 6rem; height: 6rem; }
