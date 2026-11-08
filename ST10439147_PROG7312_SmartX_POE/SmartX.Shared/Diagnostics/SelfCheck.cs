@@ -32,8 +32,47 @@ public static class SelfCheck
         AvlTreeStaysBalancedAndAnswersRanges(log);
         MeshGraphIsUndirectedAndWeighted(log);
         BreadthFirstFindsReachableAndStrandedNodes(log);
+        MinHeapAlwaysPopsTheSmallest(log);
 
         return log;
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    // Reference: Cormen, T. H. et al. (2022). Introduction to Algorithms, 4th ed., ch. 6. MIT Press.
+    private static void MinHeapAlwaysPopsTheSmallest(List<string> log)
+    {
+        var heap = new MinHeap<string, double>();
+        Assert(!heap.TryPop(out _, out _) && !heap.TryPeek(out _, out _) && heap.Height == 0, "an empty heap has nothing to pop or peek");
+
+        // 10,000 random priorities with plenty of repeats: popping them all must give them back sorted.
+        var random = new Random(7312);
+        var priorities = Enumerable.Range(0, 10_000).Select(_ => Math.Round(random.NextDouble() * 500, 1)).ToList();
+        foreach (var p in priorities) heap.Push($"link-{p}", p);
+
+        Assert(heap.Count == 10_000 && heap.IsValid(), "every push should keep the heap property");
+        Assert(heap.Height == 14, $"10,000 items should sit in floor(log2 n) + 1 = 14 levels, got {heap.Height}");
+        Assert(heap.TryPeek(out _, out var top) && top == priorities.Min(), "peek should show the smallest priority");
+
+        var popped = new List<double>();
+        while (heap.TryPop(out var element, out var priority))
+        {
+            Assert(element == $"link-{priority}", "an element should come out with its own priority");
+            popped.Add(priority);
+            if (popped.Count % 1_000 == 0) Assert(heap.IsValid(), "every pop should keep the heap property");
+        }
+
+        Assert(popped.SequenceEqual(priorities.Order()), "popping everything should return the priorities in ascending order");
+        Assert(heap.Count == 0, "the heap should be empty after popping everything");
+
+        // Interleaved pushes and pops, the way Prim's uses it.
+        heap.Push("c", 3);
+        heap.Push("a", 1);
+        Assert(heap.TryPop(out var first, out _) && first == "a", "the smaller of two should come out first");
+        heap.Push("b", 2);
+        heap.Push("d", 0.5);
+        Assert(heap.TryPop(out var next, out _) && next == "d", "an item pushed after a pop should still jump the queue if it is smallest");
+        Assert(heap.TryPop(out next, out _) && next == "b" && heap.TryPop(out next, out _) && next == "c", "the rest should follow in order");
+
+        log.Add("min-heap: array-backed, pops 10,000 random priorities in sorted order, O(log n) height, interleaved push/pop");
     }
     //----------------------------------------------------------------------------------------------------------------------//
     private static void BreadthFirstFindsReachableAndStrandedNodes(List<string> log)
