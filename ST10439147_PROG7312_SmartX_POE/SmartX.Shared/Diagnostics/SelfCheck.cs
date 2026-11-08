@@ -30,8 +30,97 @@ public static class SelfCheck
         PacketSurvivesJsonRoundTrip(log);
         EverySensorIsASpecificAgriculturalDevice(log);
         AvlTreeStaysBalancedAndAnswersRanges(log);
+        MeshGraphIsUndirectedAndWeighted(log);
+        BreadthFirstFindsReachableAndStrandedNodes(log);
 
         return log;
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    private static void BreadthFirstFindsReachableAndStrandedNodes(List<string> log)
+    {
+        //   GW - A - B - D - E        B has two ways home (via A or via C);
+        //    \      /                 D and E only have one: through B.
+        //      C --
+        const string gw = MeshGraph.GatewayId;
+        var graph = new MeshGraph();
+        graph.Connect(gw, "A", -50);
+        graph.Connect(gw, "C", -50);
+        graph.Connect("A", "B", -50);
+        graph.Connect("C", "B", -50);
+        graph.Connect("B", "D", -50);
+        graph.Connect("D", "E", -50);
+        graph.AddVertex("F");   // never linked to anything
+
+        var all = graph.BreadthFirst(gw);
+        Assert(all.Order.Count == 6 && !all.Reached("F"), "BFS should reach the 6 linked vertices and not the island");
+        Assert(all.Hops["A"] == 1 && all.Hops["C"] == 1 && all.Hops["B"] == 2 && all.Hops["D"] == 3 && all.Hops["E"] == 4,
+            "hop counts should be the fewest hops from the gateway");
+        Assert(all.Order.Select(id => all.Hops[id]).Zip(all.Order.Skip(1).Select(id => all.Hops[id])).All(p => p.First <= p.Second),
+            "BFS should discover nodes in rings: never a 3-hop node before a 2-hop one");
+        Assert(!all.Parent.ContainsKey(gw) && all.Parent["E"] == "D" && all.Parent["D"] == "B", "each node should point back one hop towards the root");
+
+        // A goes down: B is still reachable via C, at the same hop count.
+        var withoutA = graph.BreadthFirst(gw, new HashSet<string> { "A" });
+        Assert(!withoutA.Reached("A") && withoutA.Reached("E"), "losing A should strand nobody - B has a second way home");
+        Assert(withoutA.Parent["B"] == "C", "with A down, B should be reached through C");
+
+        // B goes down: D and E only ever had B, so they are cut off.
+        var withoutB = graph.BreadthFirst(gw, new HashSet<string> { "b" });   // any letter case
+        Assert(withoutB.Reached("A") && withoutB.Reached("C") && !withoutB.Reached("D") && !withoutB.Reached("E"),
+            "losing B should strand D and E, which have no other path");
+        Assert(withoutB.Order.Count == 3, "a down node must not be visited or passed through");
+
+        // A search can start anywhere, and a down or unknown root reaches nothing.
+        Assert(graph.BreadthFirst("E").Hops[gw] == 4, "BFS from a node should find the gateway 4 hops away");
+        Assert(graph.BreadthFirst(gw, new HashSet<string> { gw }).Order.Count == 0, "a down root reaches nothing");
+        Assert(graph.BreadthFirst("nope").Order.Count == 0, "an unknown root reaches nothing");
+
+        // Following the parent pointers gives the route home.
+        Assert(all.PathFrom("E")!.SequenceEqual(["E", "D", "B", "A", gw]), "E's route should run E-D-B-A-gateway");
+        Assert(withoutA.PathFrom("E")!.SequenceEqual(["E", "D", "B", "C", gw]), "with A down, E's route should heal through C");
+        Assert(withoutB.PathFrom("E") is null, "a stranded node should have no route");
+        Assert(all.PathFrom(gw)!.SequenceEqual([gw]), "the root's route is just itself");
+
+        log.Add("bfs: exact hop counts, ring order, reroutes around a down node, strands what only it connected, parent chain is the route");
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    private static void MeshGraphIsUndirectedAndWeighted(List<string> log)
+    {
+        var graph = new MeshGraph();
+        graph.Connect(MeshGraph.GatewayId, "A", -50);
+        graph.Connect("A", "B", -60);
+        graph.Connect("B", "C", -70);
+        graph.Connect("A", "C", -55);
+
+        Assert(graph.VertexCount == 4 && graph.LinkCount == 4, $"expected 4 vertices and 4 links, got {graph.VertexCount} and {graph.LinkCount}");
+        Assert(graph.Links.Count() == 4, "Links should list each undirected link once");
+
+        // Undirected: the link is filed under both ends, pointing away from each.
+        Assert(graph.Neighbours("A").Any(l => l.To == "B") && graph.Neighbours("B").Any(l => l.To == "A"), "a link should be visible from both ends");
+        Assert(graph.Neighbours("A").All(l => l.From == "A"), "each end's list should hold links leaving that end");
+        Assert(graph.DegreeOf("A") == 3, "A hears the gateway, B and C");
+
+        // Reconnecting a pair updates the reading instead of adding a parallel edge.
+        graph.Connect("B", "A", -65);
+        Assert(graph.LinkCount == 4 && graph.DegreeOf("A") == 3, "relinking a pair should not add a second edge");
+        Assert(graph.Neighbours("A").Single(l => l.To == "B").RssiDbm == -65, "relinking should update the RSSI on both ends");
+
+        // Cost: every 10 dB weaker is ten times the energy.
+        Assert(MeshGraph.CostOf(-50) == 1 && MeshGraph.CostOf(-60) == 10 && MeshGraph.CostOf(-70) == 100,
+            "cost should be 1, 10, 100 at -50, -60, -70 dBm");
+
+        // Removing a node drops every link that touched it, from the other ends too.
+        Assert(graph.RemoveVertex("A"), "removing a known vertex should succeed");
+        Assert(graph.VertexCount == 3 && graph.LinkCount == 1, $"only B-C should be left, got {graph.LinkCount} links");
+        Assert(graph.DegreeOf(MeshGraph.GatewayId) == 0 && graph.Neighbours("B").All(l => l.To != "A"), "no neighbour may still point at a removed node");
+        Assert(!graph.RemoveVertex("A"), "removing it twice should report false");
+
+        var threw = false;
+        try { graph.Connect("B", "b", -40); }
+        catch (ArgumentException) { threw = true; }
+        Assert(threw, "a node linking to itself (in any letter case) should be rejected");
+
+        log.Add("mesh graph: undirected adjacency list, no parallel edges, removal cleans both ends, cost x10 per 10 dB");
     }
     //----------------------------------------------------------------------------------------------------------------------//
     // Reference: Wikipedia. AVL tree. https://en.wikipedia.org/wiki/AVL_tree

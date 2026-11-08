@@ -35,6 +35,7 @@ builder.Services.AddSingleton<AnomalyEngine>();
 builder.Services.AddSingleton<AttachmentService>();
 builder.Services.AddSingleton<IngestQueue>();
 builder.Services.AddSingleton<CommandService>();
+builder.Services.AddSingleton<MeshNetwork>();
 builder.Services.AddSingleton(services => new PredictionService(
     services.GetRequiredService<TelemetryStore>(), services.GetRequiredService<AnomalyEngine>(), "storage/predictions.json"));
 // Reference [23]: Microsoft. Background tasks with hosted services in ASP.NET Core. Microsoft Learn.
@@ -505,6 +506,47 @@ api.MapPost("/sensors/{id}/drift", (string id, TelemetryStore store, MeshSimulat
 // ---------------------------------------------------------------- topology (recursion)
 
 api.MapGet("/topology", (TelemetryStore store) => store.Topology);
+
+// The physical radio mesh as a graph: every vertex (ESP32 nodes + the gateway) and every
+// link once, with its RSSI and routing cost. This is the graph BFS and the MST run over.
+api.MapGet("/mesh", (MeshNetwork mesh) => mesh.View());
+
+// BFS over the mesh from the gateway (or any node, via `from`): which nodes it can reach and
+// in how many hops, which are down, and which are stranded - alive, but cut off because
+// every path they had ran through a down node.
+// "Down" is the live disconnect HashSet from Part 2 (silent for 3x the publish interval).
+// `without` adds nodes to treat as down for this one query, a what-if that needs no real
+// outage: ?without=A4:CF:12:9B:05:12,DC:A6:32:77:11:02
+// `subnet` narrows the report to one deployment area: ?subnet=Facility A/Zone 1
+api.MapGet("/mesh/reachability", (
+    MeshNetwork mesh,
+    AnomalyEngine anomalies,
+    [FromQuery] string? from,
+    [FromQuery] string? subnet,
+    [FromQuery] string? without) =>
+{
+    var report = mesh.Reachability(from ?? MeshGraph.GatewayId, DownSet(anomalies, without), string.IsNullOrWhiteSpace(subnet) ? null : subnet.Trim());
+    return report is null ? Results.NotFound(new { error = $"'{from}' is not a node on the mesh." }) : Results.Ok(report);
+});
+
+// Route tracking by MAC: the node's usual hop-by-hop route to the gateway and the route it
+// is on now. When a node on the usual route is down the status is Rerouted and `nextHop`
+// is the neighbour to hand packets to instead; when no route is left it is Stranded and
+// `restoredBy` lists the down nodes whose repair would reconnect it.
+// `without` works as on /mesh/reachability: ?without=A4:CF:12:9B:05:12
+api.MapGet("/mesh/route/{id}", (string id, MeshNetwork mesh, AnomalyEngine anomalies, [FromQuery] string? without) =>
+{
+    var report = mesh.Route(id, DownSet(anomalies, without));
+    return report is null ? Results.NotFound(new { error = $"'{id}' is not a node on the mesh." }) : Results.Ok(report);
+});
+
+// The nodes the mesh endpoints treat as down: the live disconnect HashSet from Part 2,
+// plus any comma-separated MACs passed in `without` for a what-if.
+static HashSet<string> DownSet(AnomalyEngine anomalies, string? without)
+    => anomalies.Disconnected
+        .Concat((without ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        .Select(TelemetryStore.KeyFor)
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
 api.MapPost("/topology/validate", (DeploymentNode root) => TopologyValidator.Validate(root));
 

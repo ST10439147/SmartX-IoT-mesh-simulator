@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.SignalR;
 using SmartX.Api.Hubs;
 using SmartX.Shared;
 using SmartX.Shared.Telemetry;
+using SmartX.Shared.Topology;
 
 namespace SmartX.Api.Services;
 
@@ -18,6 +19,7 @@ namespace SmartX.Api.Services;
 /// </summary>
 public sealed class MeshSimulator(
     TelemetryStore store,
+    MeshNetwork mesh,
     AnomalyEngine anomalies,
     CommandService commands,
     PredictionService predictions,
@@ -263,6 +265,57 @@ public sealed class MeshSimulator(
         Add("B8:27:EB:41:02:AB", "Booster Pump", "Facility A/Zone 2/Sub-Zone C", SensorCategory.PumpPower, 2, 940, 90);
         Add("A4:CF:12:9B:06:01", "Main Line Flow", "Facility A/Zone 2/Sub-Zone C", SensorCategory.WaterFlow, 2, 18, 1.5);
         Add("B8:27:EB:41:02:AD", "Rainwater Tank Level", "Facility A/Zone 2/Roof Array", SensorCategory.TankLevel, 5, 74, 2);
+
+        LinkMesh();
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    /// <summary>
+    /// The radio links of the seeded farm, as each node would report them: who it can hear
+    /// and at what RSSI (dBm, closer to zero is stronger). The gateway sits in the pump house.
+    ///
+    /// <para>The layout is a real mesh, not a star: only the pump house is in direct range of
+    /// the gateway. The greenhouse reaches it through the main line flow meter or the roof
+    /// array, and the field beds only through the greenhouse - so every far node has at
+    /// least two ways home, which is what lets the mesh heal when one node drops.</para>
+    /// </summary>
+    private void LinkMesh()
+    {
+        const string gateway = MeshGraph.GatewayId;
+
+        // Pump house: in direct range of the gateway.
+        mesh.Link(gateway, "B8:27:EB:41:02:AA", -45);              // Borehole Pump
+        mesh.Link(gateway, "B8:27:EB:41:02:AB", -48);              // Booster Pump
+        mesh.Link(gateway, "A4:CF:12:9B:06:01", -52);              // Main Line Flow
+        mesh.Link("B8:27:EB:41:02:AA", "B8:27:EB:41:02:AB", -42);
+        mesh.Link("B8:27:EB:41:02:AB", "A4:CF:12:9B:06:01", -50);
+
+        // Roof array: a weak direct hop, or a better one via the flow meter.
+        mesh.Link(gateway, "B8:27:EB:41:02:AD", -63);              // Rainwater Tank Level
+        mesh.Link("A4:CF:12:9B:06:01", "B8:27:EB:41:02:AD", -58);
+
+        // Greenhouse <-> pump house / roof: the long hops that carry Zone 1 home.
+        mesh.Link("A4:CF:12:9B:06:01", "A4:CF:12:9B:05:13", -67);  // flow meter - Grow Light
+        mesh.Link("B8:27:EB:41:02:AD", "A4:CF:12:9B:05:13", -71);  // tank - Grow Light
+        mesh.Link("B8:27:EB:41:02:AD", "DC:A6:32:77:11:02", -69);  // tank - Roof Vent
+
+        // Inside the greenhouse.
+        mesh.Link("A4:CF:12:9B:05:13", "A4:CF:12:9B:05:10", -50);  // Grow Light - Humidity
+        mesh.Link("A4:CF:12:9B:05:13", "A4:CF:12:9B:05:11", -58);  // Grow Light - Air Temp
+        mesh.Link("A4:CF:12:9B:05:10", "A4:CF:12:9B:05:11", -44);  // Humidity - Air Temp
+        mesh.Link("A4:CF:12:9B:05:11", "A4:CF:12:9B:05:12", -47);  // Air Temp - pH
+        mesh.Link("A4:CF:12:9B:05:12", "DC:A6:32:77:11:02", -53);  // pH - Roof Vent
+        mesh.Link("A4:CF:12:9B:05:10", "DC:A6:32:77:11:02", -55);  // Humidity - Roof Vent
+
+        // Greenhouse <-> field beds: two separate bridges.
+        mesh.Link("A4:CF:12:9B:05:12", "A4:CF:12:9B:04:7E", -66);  // pH - Soil Moisture North
+        mesh.Link("DC:A6:32:77:11:02", "DC:A6:32:77:11:01", -70);  // Roof Vent - Drip Valve A
+
+        // Field beds.
+        mesh.Link("A4:CF:12:9B:04:7E", "A4:CF:12:9B:04:7F", -55);  // Moisture North - South
+        mesh.Link("A4:CF:12:9B:04:7E", "DC:A6:32:77:11:01", -49);  // Moisture North - Valve A
+        mesh.Link("A4:CF:12:9B:04:7F", "DC:A6:32:77:11:03", -51);  // Moisture South - Valve B
+        mesh.Link("A4:CF:12:9B:04:7F", "DC:A6:32:77:11:01", -60);  // Moisture South - Valve A
+        mesh.Link("DC:A6:32:77:11:01", "DC:A6:32:77:11:03", -54);  // Valve A - Valve B
     }
 
     //----------------------------------------------------------------------------------------------------------------------//

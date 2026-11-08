@@ -47,6 +47,62 @@ public sealed class GatewayClient(HttpClient http)
 
     public async Task<DeploymentNode?> GetTopologyAsync(CancellationToken ct = default)
         => await http.GetFromJsonAsync<DeploymentNode>("api/topology", SmartXJson.Options, ct);
+
+    /// <summary>The radio mesh graph: every node and link. Null if the gateway could not be reached.</summary>
+    public async Task<MeshView?> GetMeshAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            return await http.GetFromJsonAsync<MeshView>("api/mesh", SmartXJson.Options, ct);
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// BFS from the gateway (or <paramref name="from"/>): reachable, down and stranded nodes,
+    /// optionally narrowed to a <paramref name="subnet"/> and with <paramref name="without"/>
+    /// treated as down. Null if the gateway could not be reached or <paramref name="from"/> is unknown.
+    /// </summary>
+    public async Task<ReachabilityReport?> GetReachabilityAsync(
+        string? from = null, string? subnet = null, IEnumerable<string>? without = null, CancellationToken ct = default)
+    {
+        var query = new List<string>();
+        if (!string.IsNullOrWhiteSpace(from)) query.Add($"from={Uri.EscapeDataString(from)}");
+        if (!string.IsNullOrWhiteSpace(subnet)) query.Add($"subnet={Uri.EscapeDataString(subnet)}");
+        if (without?.Any() == true) query.Add($"without={Uri.EscapeDataString(string.Join(',', without))}");
+
+        try
+        {
+            return await http.GetFromJsonAsync<ReachabilityReport>(
+                "api/mesh/reachability" + (query.Count > 0 ? "?" + string.Join('&', query) : ""), SmartXJson.Options, ct);
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// One node's usual and current route to the gateway, by MAC or id, with
+    /// <paramref name="without"/> treated as down. Null if the gateway could not be reached or the node is unknown.
+    /// </summary>
+    public async Task<RouteReport?> GetRouteAsync(string macOrId, IEnumerable<string>? without = null, CancellationToken ct = default)
+    {
+        var url = $"api/mesh/route/{Uri.EscapeDataString(macOrId)}";
+        if (without?.Any() == true) url += $"?without={Uri.EscapeDataString(string.Join(',', without))}";
+
+        try
+        {
+            return await http.GetFromJsonAsync<RouteReport>(url, SmartXJson.Options, ct);
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+    }
 //----------------------------------------------------------------------------------------------------------------------//
     /// <summary>Registers a node. Field-level errors come straight back from the API's own validation.</summary>
     // Reference [17]: Microsoft. Handle errors in ASP.NET Core - problem details / ValidationProblem. Microsoft Learn.
