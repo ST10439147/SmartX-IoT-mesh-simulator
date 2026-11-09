@@ -487,6 +487,59 @@ button.tiny { padding: .2rem .5rem; font-size: .75rem; }
 .tree-name { font-weight: 550; }
 .tree .meta { font-family: var(--mono); font-size: .72rem; color: var(--dim); }
 
+/* ---------------------------------------------------------------- mesh map */
+
+/* Scales down with the panel, but stops at a width where labels stay readable;
+   below that the panel scrolls sideways instead of the page. */
+.mesh-map { display: block; width: 100%; min-width: 640px; height: auto; }
+
+.mesh-col { fill: var(--dim); font: 600 10px var(--mono); letter-spacing: .08em; text-anchor: middle; }
+
+.mesh-link { fill: none; stroke: var(--line-strong); stroke-width: 1.2; }
+.mesh-link.tree { stroke: var(--info); stroke-width: 3; stroke-linecap: round; }
+.mesh-link.dead { stroke: var(--crit); stroke-width: 1.2; stroke-dasharray: 4 4; opacity: .55; }
+
+.mesh-node circle { fill: var(--panel-2); stroke: var(--normal); stroke-width: 2; }
+.mesh-node.gateway rect { fill: var(--accent); }
+.mesh-node.down circle { fill: rgba(255, 84, 112, .14); stroke: var(--crit); }
+.mesh-node.stranded circle { fill: rgba(240, 168, 57, .12); stroke: var(--warn); stroke-dasharray: 4 3; }
+.mesh-node .mesh-x { stroke: var(--crit); stroke-width: 2.2; stroke-linecap: round; }
+/* The stroke is painted first, in the panel colour, as a halo: links passing behind a label stay readable. */
+.mesh-node text { fill: var(--text); font: 10.5px var(--sans); text-anchor: middle; paint-order: stroke; stroke: var(--panel); stroke-width: 4px; stroke-linejoin: round; }
+.mesh-node text.mesh-mac { fill: var(--dim); font: 9px var(--mono); }
+.mesh-node.down text, .mesh-node.stranded text { fill: var(--muted); }
+
+/* The tracked route: drawn last and widest, in the accent, so it reads over the blue tree. */
+.mesh-link.route { stroke: var(--accent); stroke-width: 5; stroke-linecap: round; opacity: 1; stroke-dasharray: none; }
+.mesh-node.on-route circle { stroke: var(--accent); stroke-width: 3; }
+.mesh-node.selected circle { stroke: var(--accent); stroke-width: 4; }
+.mesh-node[role=button] { cursor: pointer; }
+.mesh-node[role=button]:hover circle { fill: var(--hover); }
+.mesh-node[role=button]:focus { outline: none; }
+.mesh-node[role=button]:focus-visible circle { stroke: var(--info); stroke-width: 4; }
+
+.route-hops { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .35rem; margin: 0; padding: 0; list-style: none; font-size: .82rem; }
+.route-hops li { background: var(--panel-2); border: 1px solid var(--line-soft); border-radius: 999px; padding: .1rem .55rem; }
+.route-hops li + li::before { content: "\2192"; color: var(--dim); margin: 0 .4rem 0 -.2rem; }
+.route-hops li.failed { border-color: var(--crit); color: var(--crit); text-decoration: line-through; }
+
+/* History log: a fixed-height window the virtualised rows scroll inside, header pinned. */
+.history-table { max-height: 380px; overflow: auto; margin-top: .9rem; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); }
+.history-table thead th { position: sticky; top: 0; background: var(--panel); z-index: 1; }
+.history-table td { white-space: nowrap; height: 31px; }
+.history-table tr.late td { color: var(--warn); }
+
+.chips { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .6rem; }
+.chips button { font-size: .78rem; padding: .2rem .6rem; }
+
+.mesh-legend { list-style: none; padding: 0; margin: .9rem 0 0; display: flex; flex-wrap: wrap; gap: .4rem 1.2rem; font-size: .8rem; color: var(--muted); }
+.mesh-legend li { display: flex; align-items: center; gap: .45rem; }
+.mesh-legend .swatch { display: inline-block; width: 22px; height: 0; border-top: 3px solid var(--info); }
+.mesh-legend .swatch.link { border-top: 1.5px solid var(--line-strong); }
+.mesh-legend .swatch.route { border-top: 5px solid var(--accent); }
+.mesh-legend .swatch.down { width: 12px; height: 12px; border: 2px solid var(--crit); border-radius: 50%; background: rgba(255, 84, 112, .14); }
+.mesh-legend .swatch.stranded { width: 12px; height: 12px; border: 2px dashed var(--warn); border-radius: 50%; }
+
 /* ---------------------------------------------------------------- boot + errors */
 
 .loading-progress { position: fixed; inset: 0; margin: auto; width: 6rem; height: 6rem; }

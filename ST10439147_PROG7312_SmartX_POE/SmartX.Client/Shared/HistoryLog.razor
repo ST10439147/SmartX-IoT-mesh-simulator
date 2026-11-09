@@ -1,0 +1,307 @@
+@*
+    A sensor's historical telemetry for any time window, read from the gateway's AVL tree
+    (section 2) with GET /api/sensors/{id}/history/range. The tree answers "every reading
+    between 14:00 and 16:00" by skipping whole subtrees outside the window, and the panel
+    shows how many tree nodes the query touched against how many the tree holds - the
+    evidence that it did not scan the whole history.
+
+    A day of history is ~43,000 readings for a 2-second sensor, so:
+    - the chart is downsampled to the min and max of each time slice, which keeps spikes visible
+      (picking every n-th reading would quietly drop them - the one thing an operator looks for);
+    - the table is virtualised: only the rows on screen exist in the DOM.
+*@
+@using System.Diagnostics
+@using System.Globalization
+@implements IDisposable
+@inject GatewayClient Gateway
+
+<div class="form-grid">
+    <div class="field">
+        <label for="hl-sensor">Sensor</label>
+        <select id="hl-sensor" value="@_sensorId" @onchange="SensorChangedAsync">
+            @if (_sensorId is null)
+            {
+                <option value="">Pick a sensor...</option>
+            }
+            @foreach (var sensor in (Sensors ?? []).OrderBy(s => s.DisplayName))
+            {
+                <option value="@sensor.Id">@sensor.DisplayName (@(sensor.Id[^5..]))</option>
+            }
+        </select>
+    </div>
+    <div class="field">
+        <label for="hl-from">From</label>
+        <input id="hl-from" type="datetime-local" step="1" @bind="_from" />
+    </div>
+    <div class="field">
+        <label for="hl-to">To</label>
+        <input id="hl-to" type="datetime-local" step="1" @bind="_to" />
+    </div>
+</div>
+
+<div class="actions" style="margin-top:.6rem">
+    <button class="primary" @onclick="RunAsync" disabled="@(_sensorId is null || _busy)">@(_busy ? "Querying..." : "Run query")</button>
+    <button @onclick="() => PresetAsync(TimeSpan.FromMinutes(15))">Last 15 min</button>
+    <button @onclick="() => PresetAsync(TimeSpan.FromHours(1))">Last hour</button>
+    <button @onclick="AfternoonAsync" title="The brief's example window: today if it has passed, otherwise yesterday">14:00 - 16:00</button>
+    <button @onclick="() => PresetAsync(TimeSpan.FromHours(24))">Last 24 h</button>
+</div>
+
+@if (_error is not null)
+{
+    <div class="toast bad" style="margin-top:.9rem"><span>@_error</span></div>
+}
+
+@if (_result is { } r)
+{
+    <div class="stats" style="margin-top:1rem">
+        <div class="stat">
+            <div class="label">Readings</div>
+            <div class="value">@r.Points.Count.ToString("N0", CultureInfo.InvariantCulture)</div>
+        </div>
+        @if (IsBoolean)
+        {
+            <div class="stat">
+                <div class="label">Time open</div>
+                <div class="value">@(r.Points.Count == 0 ? "-" : (r.Points.Count(p => p.Value != 0) / (double)r.Points.Count).ToString("P0", CultureInfo.InvariantCulture))</div>
+            </div>
+        }
+        else
+        {
+            <div class="stat">
+                <div class="label">Min</div>
+                <div class="value">@Format(r.Points.Count == 0 ? null : r.Points.Min(p => p.Value))</div>
+            </div>
+            <div class="stat">
+                <div class="label">Average</div>
+                <div class="value">@Format(r.Points.Count == 0 ? null : r.Points.Average(p => p.Value))</div>
+            </div>
+            <div class="stat">
+                <div class="label">Max</div>
+                <div class="value">@Format(r.Points.Count == 0 ? null : r.Points.Max(p => p.Value))</div>
+            </div>
+        }
+        <div class="stat" title="Nodes the range query visited, out of every node in this sensor's AVL tree">
+            <div class="label">AVL nodes touched</div>
+            <div class="value">@r.NodesVisited.ToString("N0", CultureInfo.InvariantCulture) <span style="font-size:.8rem;color:var(--dim)">/ @r.TreeSize.ToString("N0", CultureInfo.InvariantCulture)</span></div>
+        </div>
+        <div class="stat" title="Levels in the self-balancing tree: about 1.44 x log2 of its size at worst">
+            <div class="label">Tree height</div>
+            <div class="value">@r.TreeHeight</div>
+        </div>
+        <div class="stat" title="Request to the gateway and back, including the query">
+            <div class="label">Round trip</div>
+            <div class="value">@_elapsedMs ms</div>
+        </div>
+    </div>
+
+    <p style="margin-top:.9rem">
+        @r.Points.Count.ToString("N0", CultureInfo.InvariantCulture) readings from @SensorName between
+        @r.From.ToLocalTime().ToString("dd MMM HH:mm:ss", CultureInfo.InvariantCulture) and @r.To.ToLocalTime().ToString("dd MMM HH:mm:ss", CultureInfo.InvariantCulture).
+        The tree holds @r.TreeSize.ToString("N0", CultureInfo.InvariantCulture); the query touched @r.NodesVisited.ToString("N0", CultureInfo.InvariantCulture)
+        of them@(r.TreeSize > 0 ? $" ({(r.NodesVisited / (double)r.TreeSize).ToString("P1", CultureInfo.InvariantCulture)})" : "") - only the readings in the window plus the path down to them.
+    </p>
+
+    @if (r.Points.Count > 1)
+    {
+        <TimelineGraph Points="_chart" Label="@($"{SensorName} readings over the selected window")" />
+        @if (_chart.Count < r.Points.Count)
+        {
+            <p class="hint" style="margin-top:.3rem">
+                Chart shows @_chart.Count of @r.Points.Count.ToString("N0", CultureInfo.InvariantCulture) readings: the lowest and highest of each time slice, so spikes are never dropped.
+                The table below has every reading.
+            </p>
+        }
+
+        @* Keyed per query so a new result starts scrolled to the top (newest first), not wherever the last one was left. *@
+        <div class="history-table" @key="_queryNumber">
+            <table class="context-table">
+                <thead>
+                    <tr><th>Time taken</th><th>Value</th><th>Arrival</th></tr>
+                </thead>
+                <tbody>
+                    <Virtualize Items="_rows" ItemSize="31" OverscanCount="20" SpacerElement="tr" Context="row">
+                        <tr class="@(row.Late ? "late" : null)">
+                            <td>@row.Point.At.ToLocalTime().ToString(_timeFormat, CultureInfo.InvariantCulture)</td>
+                            <td>@FormatValue(row.Point.Value)</td>
+                            <td>@(row.Point.Sequence == 0 ? "seeded history" : $"#{row.Point.Sequence}")@(row.Late ? " - arrived late" : "")</td>
+                        </tr>
+                    </Virtualize>
+                </tbody>
+            </table>
+        </div>
+        <p class="hint" style="margin-top:.3rem">Newest first. "Seeded history" is the day of mock telemetry loaded at boot; #n is the order a live reading reached the gateway.</p>
+    }
+    else if (r.Points.Count == 0)
+    {
+        <p class="hint">No readings in that window. History covers the last 24 hours.</p>
+    }
+}
+else if (_sensorId is null)
+{
+    <p class="hint" style="margin-top:.9rem">Pick a sensor, or track a node above.</p>
+}
+
+@code {
+    /// <summary>Registered sensors, for the picker and for each one's unit and payload type.</summary>
+    [Parameter, EditorRequired] public IReadOnlyList<SensorSnapshot>? Sensors { get; set; }
+
+    /// <summary>When this changes (the page tracked a node), the log switches to that sensor and re-queries.</summary>
+    [Parameter] public string? SensorId { get; set; }
+
+    private const int ChartSlices = 300;   // up to 600 points: min and max of each slice
+
+    private readonly CancellationTokenSource _cts = new();
+    private string? _sensorId;
+    private string? _lastParameter;
+    private DateTime _from = DateTime.Now.AddHours(-1);
+    private DateTime _to = DateTime.Now;
+    private HistoryRange? _result;
+    private List<TimelinePoint> _chart = [];
+    private List<(TimelinePoint Point, bool Late)> _rows = [];
+    private string _timeFormat = "HH:mm:ss";
+    private long _elapsedMs;
+    private int _queryNumber;
+    private string? _error;
+    private bool _busy;
+
+    private SensorSnapshot? Sensor => Sensors?.FirstOrDefault(s => s.Id == _sensorId);
+    private string SensorName => Sensor?.DisplayName ?? _sensorId ?? "";
+    private bool IsBoolean => Sensor?.Payload == PayloadKind.Boolean;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // Follow the page's tracked node, but only when it changes - re-renders with the
+        // same value must not override a sensor the operator picked here.
+        if (SensorId is not null && SensorId != _lastParameter)
+        {
+            _lastParameter = SensorId;
+            _sensorId = SensorId;
+            await RunAsync();
+        }
+        else if (_sensorId is null && Sensors is { Count: > 0 })
+        {
+            // Open on something rather than an empty panel.
+            _sensorId = Sensors.OrderBy(s => s.DisplayName).First().Id;
+            await RunAsync();
+        }
+    }
+
+    private async Task SensorChangedAsync(ChangeEventArgs e)
+    {
+        _sensorId = e.Value?.ToString() is { Length: > 0 } id ? id : null;
+        await RunAsync();
+    }
+
+    private Task PresetAsync(TimeSpan span)
+    {
+        _to = DateTime.Now;
+        _from = _to - span;
+        return RunAsync();
+    }
+
+    // 14:00 to 16:00 today if that has finished, otherwise yesterday's - history only goes back a day.
+    private Task AfternoonAsync()
+    {
+        var day = DateTime.Today;
+        if (DateTime.Now < day.AddHours(16)) day = day.AddDays(-1);
+        _from = day.AddHours(14);
+        _to = day.AddHours(16);
+        return RunAsync();
+    }
+
+    private async Task RunAsync()
+    {
+        if (_sensorId is null) return;
+        if (_from > _to)
+        {
+            _error = "'From' must be before 'To'.";
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        var sensorId = _sensorId;
+        var stopwatch = Stopwatch.StartNew();
+
+        try
+        {
+            // datetime-local has no time zone: it is the operator's local time.
+            var result = await Gateway.GetHistoryRangeAsync(sensorId, new DateTimeOffset(_from), new DateTimeOffset(_to), _cts.Token);
+            stopwatch.Stop();
+
+            if (sensorId != _sensorId) return;   // the operator picked another sensor while this was in flight
+
+            if (result is null)
+            {
+                _error = "The gateway could not be reached, or the sensor is no longer registered.";
+                _result = null;
+                return;
+            }
+
+            _result = result;
+            _queryNumber++;
+            _elapsedMs = stopwatch.ElapsedMilliseconds;
+            _chart = Downsample(result.Points, ChartSlices);
+
+            var late = TimelineGraph.LateFlags(result.Points);
+            _rows = result.Points.Select((p, i) => (p, late[i])).Reverse().ToList();
+            _timeFormat = (result.To - result.From) > TimeSpan.FromHours(20) ? "dd MMM HH:mm:ss" : "HH:mm:ss";
+        }
+        catch (OperationCanceledException)
+        {
+            // Left the page mid-query.
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    /// <summary>
+    /// At most two points per time slice - the lowest and the highest, in time order. A plain
+    /// "every n-th reading" would draw a smoother line and silently lose the spikes.
+    /// </summary>
+    private static List<TimelinePoint> Downsample(IReadOnlyList<TimelinePoint> points, int slices)
+    {
+        if (points.Count <= slices * 2) return points.ToList();
+
+        var size = (double)points.Count / slices;
+        var result = new List<TimelinePoint>(slices * 2);
+
+        for (var slice = 0; slice < slices; slice++)
+        {
+            var start = (int)(slice * size);
+            var end = Math.Min(points.Count, (int)((slice + 1) * size));
+            if (end <= start) continue;
+
+            TimelinePoint low = points[start], high = points[start];
+            for (var i = start + 1; i < end; i++)
+            {
+                if (points[i].Value < low.Value) low = points[i];
+                if (points[i].Value > high.Value) high = points[i];
+            }
+
+            var (first, second) = low.At <= high.At ? (low, high) : (high, low);
+            result.Add(first);
+            if (!ReferenceEquals(first, second)) result.Add(second);
+        }
+
+        return result;
+    }
+
+    private string FormatValue(double value) => Sensor?.Payload switch
+    {
+        PayloadKind.Boolean => value != 0 ? "OPEN" : "SHUT",
+        PayloadKind.Integer => $"{value.ToString("0", CultureInfo.InvariantCulture)} {Sensor.Unit}",
+        _ => $"{value.ToString("0.00", CultureInfo.InvariantCulture)} {Sensor?.Unit}"
+    };
+
+    private string Format(double? value) => value is null ? "-" : FormatValue(value.Value);
+
+    public void Dispose()
+    {
+        _cts.Cancel();
+        _cts.Dispose();
+    }
+}
