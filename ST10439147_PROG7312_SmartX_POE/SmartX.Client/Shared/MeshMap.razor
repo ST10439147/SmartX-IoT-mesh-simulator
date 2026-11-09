@@ -10,7 +10,8 @@
     Encoding follows the console's anomaly-first rule: every link is drawn in one muted line,
     and only what matters gets colour - the MST links packets actually travel (info blue),
     down nodes (critical red, crossed out) and stranded nodes (warning amber, dashed).
-    Hovering a node or link shows its MAC, RSSI and energy cost.
+    Hovering a node or link shows its MAC, RSSI and energy cost. A tracked route is drawn on
+    top in the accent green, and clicking (or Enter on) a node asks the page to track it.
 
     Inline SVG, no graph library, for the same reason as the sparkline: a few circles and
     lines are cheaper to write than a JS dependency is to load.
@@ -35,12 +36,12 @@ else
                 }
             </g>
 
-            @* Links first so the nodes sit on top of them. *@
-            @foreach (var link in Mesh.Links)
+            @* Links first so the nodes sit on top of them; the tracked route last of all, so it is never hidden. *@
+            @foreach (var link in Mesh.Links.OrderBy(l => OnRoute(l)))
             {
                 if (!_position.TryGetValue(link.From, out var a) || !_position.TryGetValue(link.To, out var b)) continue;
 
-                <path class="mesh-link @LinkClass(link)" d="@LinkPath(a, b)">
+                <path class="mesh-link @LinkClass(link) @(OnRoute(link) ? "route" : "")" d="@LinkPath(a, b)">
                     <title>@Name(link.From) - @Name(link.To): @link.RssiDbm dBm, cost @link.Cost.ToString("0.##", CultureInfo.InvariantCulture)@(InTree(link) ? " (routing tree)" : "")</title>
                 </path>
             }
@@ -50,8 +51,13 @@ else
                 if (!_position.TryGetValue(vertex.Id, out var p)) continue;
                 var (first, second) = SplitName(vertex.Name);
 
-                <g class="mesh-node @NodeClass(vertex)" transform="translate(@N(p.X) @N(p.Y))">
-                    <title>@vertex.Name (@vertex.Id) - @vertex.DeploymentPath, hears @vertex.Degree node(s)@StateSuffix(vertex)</title>
+                <g class="mesh-node @NodeClass(vertex) @RouteClass(vertex)" transform="translate(@N(p.X) @N(p.Y))"
+                   role="@(Clickable(vertex) ? "button" : null)"
+                   tabindex="@(Clickable(vertex) ? 0 : null)"
+                   aria-label="@(Clickable(vertex) ? $"Track the route of {vertex.Name}" : null)"
+                   @onclick="() => ClickAsync(vertex)"
+                   @onkeydown="e => KeyAsync(e, vertex)">
+                    <title>@vertex.Name (@vertex.Id) - @vertex.DeploymentPath, hears @vertex.Degree node(s)@StateSuffix(vertex)@(Clickable(vertex) ? ". Click to track its route." : "")</title>
 
                     @if (vertex.IsGateway)
                     {
@@ -78,6 +84,10 @@ else
     </div>
 
     <ul class="mesh-legend">
+        @if (Route is not null)
+        {
+            <li><span class="swatch route"></span>Tracked route</li>
+        }
         <li><span class="swatch tree"></span>Routing tree (MST): the links packets travel</li>
         <li><span class="swatch link"></span>Other radio link (backup path)</li>
         <li><span class="swatch down"></span>Down: silent</li>
@@ -92,6 +102,15 @@ else
     /// <summary>The live MST: which links to highlight, and which nodes are down or stranded.</summary>
     [Parameter] public MstReport? Mst { get; set; }
 
+    /// <summary>A route to draw over everything else, node first and gateway last.</summary>
+    [Parameter] public MeshRoute? Route { get; set; }
+
+    /// <summary>The node being tracked, ringed even when it has no route (down or stranded).</summary>
+    [Parameter] public string? Selected { get; set; }
+
+    /// <summary>Raised with a node's id when it is clicked (or Enter/Space when focused). Not raised for the gateway.</summary>
+    [Parameter] public EventCallback<string> OnNodeClick { get; set; }
+
     private const string GatewayColumn = "\u0000gateway";
     private const double ColumnWidth = 150, RowHeight = 78, Top = 52, Side = 75;
 
@@ -102,7 +121,7 @@ else
     private readonly List<string> _rowOrder = [];
     private readonly Dictionary<string, (double X, double Y)> _position = new(StringComparer.OrdinalIgnoreCase);
     private List<Column> _columns = [];
-    private HashSet<string> _tree = [], _down = [], _stranded = [];
+    private HashSet<string> _tree = [], _down = [], _stranded = [], _routeLinks = [], _routeNodes = [];
     private Dictionary<string, string> _names = [];
     private double _width, _height;
 
@@ -139,7 +158,22 @@ else
         _tree = (Mst?.Edges ?? []).Select(e => Key(e.From, e.To)).ToHashSet();
         _down = (Mst?.Down ?? []).Select(v => v.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
         _stranded = (Mst?.Unreached ?? []).Select(v => v.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        _routeLinks = (Route?.Links ?? []).Select(l => Key(l.From, l.To)).ToHashSet();
+        _routeNodes = (Route?.Hops ?? []).Select(h => h.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
+
+    private bool OnRoute(MeshLink link) => _routeLinks.Contains(Key(link.From, link.To));
+
+    private string RouteClass(MeshVertex v)
+        => string.Equals(v.Id, Selected, StringComparison.OrdinalIgnoreCase) ? "selected"
+            : _routeNodes.Contains(v.Id) ? "on-route"
+            : "";
+
+    private bool Clickable(MeshVertex v) => !v.IsGateway && OnNodeClick.HasDelegate;
+
+    private Task ClickAsync(MeshVertex v) => Clickable(v) ? OnNodeClick.InvokeAsync(v.Id) : Task.CompletedTask;
+
+    private Task KeyAsync(KeyboardEventArgs e, MeshVertex v) => e.Key is "Enter" or " " ? ClickAsync(v) : Task.CompletedTask;
 
     private static string ColumnKey(MeshVertex v) => v.IsGateway ? GatewayColumn : v.DeploymentPath;
 
