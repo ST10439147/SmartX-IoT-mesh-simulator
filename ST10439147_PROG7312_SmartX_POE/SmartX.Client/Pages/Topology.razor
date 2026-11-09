@@ -66,7 +66,7 @@
         <h2>Mesh map</h2>
         <span class="count">@(_updated is null ? "connecting..." : $"updated {_updated.Value.ToLocalTime():HH:mm:ss}, every 5 s")</span>
     </div>
-    <MeshMap Mesh="_mesh" Mst="_mst" Route="_route?.Efficient" Selected="_tracked" OnNodeClick="TrackAsync" />
+    <MeshMap Mesh="_mesh" Mst="_mst" Route="_route?.Efficient" Selected="@_tracked" OnNodeClick="TrackAsync" />
 </section>
 
 @* ------------------------------------------------------------ route tracker *@
@@ -186,6 +186,20 @@
     }
 </section>
 
+@* ------------------------------------------------------------ historical log *@
+<section class="panel" style="margin-bottom:1rem">
+    <div class="panel-head">
+        <h2>Historical telemetry</h2>
+        <span class="count">AVL range query &middot; follows the tracked node</span>
+    </div>
+    <p>
+        Every reading a sensor took inside a time window, from its self-balancing AVL tree. The tree skips any
+        branch that lies wholly outside the window, so pulling two hours out of a day touches only the readings
+        returned plus the path down to them - not the whole history.
+    </p>
+    <HistoryLog Sensors="_sensors" SensorId="@_tracked" />
+</section>
+
 @* ------------------------------------------------------------ the tree itself *@
 <section class="panel">
     <div class="panel-head">
@@ -245,13 +259,26 @@
     private readonly List<string> _whatIf = [];    // nodes treated as down for this page only
     private int _loadVersion;                      // newest load wins; see LoadAsync
 
-    private IEnumerable<MeshVertex> Nodes => (_mesh?.Vertices ?? []).Where(v => !v.IsGateway).OrderBy(v => v.Name);
+    // Historical log: the sensor list (names, units, payload types). Loaded once - it only
+    // changes when a node is registered or deleted, not every poll.
+    private IReadOnlyList<SensorSnapshot>? _sensors;
+
+    private IEnumerable<MeshVertex> Nodes =>(_mesh?.Vertices ?? []).Where(v => !v.IsGateway).OrderBy(v => v.Name);
 
     protected override async Task OnInitializedAsync()
     {
         // Taken once: after Dispose the source is gone, but a captured token still reads as cancelled.
         _token = _cts.Token;
+        var sensors = Gateway.GetSensorsAsync(_token);
         await LoadAsync(_token);
+        try
+        {
+            _sensors = await sensors;
+        }
+        catch (HttpRequestException)
+        {
+            // The historical log stays on its "pick a sensor" hint; the map still works.
+        }
         _ = PollAsync(_token);
     }
 

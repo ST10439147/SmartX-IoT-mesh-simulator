@@ -523,6 +523,12 @@ button.tiny { padding: .2rem .5rem; font-size: .75rem; }
 .route-hops li + li::before { content: "\2192"; color: var(--dim); margin: 0 .4rem 0 -.2rem; }
 .route-hops li.failed { border-color: var(--crit); color: var(--crit); text-decoration: line-through; }
 
+/* History log: a fixed-height window the virtualised rows scroll inside, header pinned. */
+.history-table { max-height: 380px; overflow: auto; margin-top: .9rem; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); }
+.history-table thead th { position: sticky; top: 0; background: var(--panel); z-index: 1; }
+.history-table td { white-space: nowrap; height: 31px; }
+.history-table tr.late td { color: var(--warn); }
+
 .chips { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .6rem; }
 .chips button { font-size: .78rem; padding: .2rem .6rem; }
 
