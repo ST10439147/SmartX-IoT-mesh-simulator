@@ -1,8 +1,16 @@
-# Smart-X IoT Mesh Gateway - Part 2
+# Smart-X IoT Mesh Gateway - Final PoE
 
 Ingestion API and configuration dashboard for the Smart-X hybrid IoT ecosystem: an
 ASP.NET Core Minimal API on **.NET 10** receiving multi-typed telemetry from a simulated
 ESP32 mesh, paired with a **Blazor WebAssembly** operator console.
+
+All three architectural pillars are live:
+
+| Pillar | Page | Built in | Data structures |
+|---|---|---|---|
+| Sensor data ingestion and telemetry | `/ingestion`, `/dashboard` | Part 1 | Generics, operator overloading, jagged arrays, recursion |
+| Real-time command stream and history | `/commands` | Part 2 | Queue, priority queue, stack, dictionary, sorted dictionary, hash set |
+| Network topology and mesh routing | `/topology` | Final PoE | AVL tree, graph, BFS, binary min-heap, Prim's minimum spanning tree |
 
 The API serves the client's static files, so the whole system is **one process on one
 port** - no CORS configuration, no second terminal.
@@ -19,6 +27,8 @@ port** - no CORS configuration, no second terminal.
 - https://youtu.be/FJqMu1NI1Ys 
 ### Part 2 video
 - https://youtu.be/42bYpN57Wcw
+### Final PoE video
+- *(link to be added)*
 
 ## Quick start
 
@@ -37,8 +47,9 @@ dotnet build ST10439147_PROG7312_SmartX_POE.slnx -c Release
 dotnet run --project ST10439147_PROG7312_SmartX_POE --launch-profile http
 ```
 
-Then open **<http://localhost:5036>**. The mesh simulator seeds 13 nodes and starts
-publishing immediately, so the dashboard has live data within a second or two.
+Then open **<http://localhost:5036>**. The mesh simulator seeds 13 nodes, their 23 radio
+links and a day of history (about 416,000 readings, straight into each sensor's AVL tree),
+then starts publishing immediately, so every page has live data within a few seconds.
 
 For HTTPS instead, use `--launch-profile https` and open <https://localhost:7030>
 (run `dotnet dev-certs https --trust` once if the browser objects to the certificate).
@@ -82,8 +93,9 @@ Nothing else. No database, no message broker, no Node toolchain.
 ## Verifying the build
 
 The non-trivial logic ships with a runnable self-check - ring buffer wraparound,
-operator overloading, the no-boxing claim, recursive validation under hostile depth, and
-the attachment crypto:
+operator overloading, the no-boxing claim, recursive validation under hostile depth, the
+attachment crypto, every Part 2 collection, and every Part 3 structure: the AVL tree, the
+mesh graph, BFS, the min-heap, Prim's MST, and the routing built on them:
 
 ```bash
 dotnet run --project ST10439147_PROG7312_SmartX_POE -- --selftest
@@ -104,6 +116,12 @@ SmartX self-check
   ok  recursion: cycle in the deployment graph detected and reported
   ok  serialisation: TelemetryPacket<float> and <bool> round-trip through JSON
   ok  categories: 10 agricultural sensor types, payload and unit fixed per type, unknown types rejected
+  ok  avl tree: balanced under sorted inserts, range queries prune, remove-min keeps it balanced
+  ok  mesh graph: undirected adjacency list, no parallel edges, removal cleans both ends, cost x10 per 10 dB
+  ok  bfs: exact hop counts, ring order, reroutes around a down node, strands what only it connected, parent chain is the route
+  ok  min-heap: array-backed, pops 10,000 random priorities in sorted order, O(log n) height, interleaved push/pop
+  ok  prim's mst: skips the costly direct link BFS takes, heals around down nodes, matches kruskal's on 25 random meshes
+  ok  mst routes: follow the tree home, never beat dijkstra (which matches bellman-ford); 261 of 1 023 node routes cost more than their own cheapest path
   ok  crypto: AES-256-GCM round-trips at 0, 1, 1 KB, 64 KB and multi-chunk sizes
   ok  crypto: bit-flips, truncation and wrong keys are all rejected
   ok  uploads: magic-byte sniffing, text validation and path-traversal stripping
@@ -113,10 +131,17 @@ SmartX self-check
   ok  pump override: a commanded stop and restart raise nothing, an unexpected stop still alerts
   ok  dictionary: a device is found by id or by MAC in any spelling, misses are counted
   ok  sorted dictionary: out-of-order packets read back in time order, the log stays bounded
+  ok  mesh network: reported links kept, unreported nodes auto-linked by location, deletes leave no dangling links
+  ok  mesh reachability: down and stranded nodes separated, subnet narrows the report not the search
+  ok  mesh routes: traced by MAC, heal around a down node with a new next hop, stranded nodes name their repair, efficient route follows the mst
+  ok  mesh mst report: spans the live mesh, priced against the bfs tree and the full mesh, re-forms around down nodes
+  ok  mesh routes: when the fewest-hop and mst routes differ, packets follow the mst and its failures count as reroutes
   ok  hash set: a silent node raises one disconnect alert, an open error state is not raised twice
   ok  prediction log: every search and command is logged with the alert that was open at the time
   ok  dictionary of counters: after-X-did-Y pairs are counted and the most frequent follow-up ranks first
   ok  suggestion: when a moisture alert recurs, the pump the operator keeps searching for is suggested
+  ok  persistence: first run is seeded, counters survive a restart, open faults are flagged in the insights
+  ok  async gate: concurrent actions on a cold engine load once, lose no counts and all reach the saved file
   ok  trend: a least-squares line flags a device climbing toward its threshold and when it will cross
 ----------------------------------------------------------------
 all checks passed
@@ -125,6 +150,75 @@ all checks passed
 That `0 bytes allocated over 50 000 ingests` line is measured with
 `GC.GetAllocatedBytesForCurrentThread()`, not asserted in a comment - if anything on the
 ingest path started boxing, this check fails.
+
+---
+
+## Testing Part 3 (Network topology and mesh routing)
+
+About five minutes. How each structure works, and why it was chosen, is in
+[*How the network topology feature works*](#how-the-network-topology-feature-works) below.
+
+**1. Self-check (about 30 seconds, no running app needed).** Run the command in
+*Verifying the build*. These lines are the Part 3 checks:
+
+| Structure | Self-check line starts with | What it proves |
+|---|---|---|
+| AVL tree | `avl tree:` | 10,000 keys inserted in sorted order (a plain BST's worst case) stay at most 20 levels deep; a range query returns exactly the keys in the window while visiting far fewer than n nodes |
+| Graph | `mesh graph:` | links are stored at both ends, relinking a pair never adds a second edge, removing a node removes every link to it |
+| BFS | `bfs:` | hop counts are the fewest possible, a node with a second way home survives an outage, a node without one is stranded |
+| Binary min-heap | `min-heap:` | 10,000 random priorities come out in sorted order; the heap is 14 levels deep (⌊log₂ n⌋ + 1) |
+| Prim's MST | `prim's mst:` | the MST skips an expensive direct link that BFS takes, and matches an independent Kruskal's total on 25 random meshes |
+| MST routing | `mst routes:` | no MST or BFS route ever beats Dijkstra, and Dijkstra matches an independent Bellman-Ford |
+| The API side | `mesh network:`, `mesh reachability:`, `mesh routes:`, `mesh mst report:` | registry sync, down vs stranded, rerouting, and the MST report |
+
+**2. Start the app and open <http://localhost:5036/topology>.**
+
+The stats row shows the MST at about **106** energy units, against about **314** for the
+fewest-hop (BFS) routing tree: **66% saved**. The map draws the MST in blue.
+
+**3. AVL range query: "moisture readings between 14:00 and 16:00 for Node A".**
+
+1. In *Route tracker*, type `04:7E` (the end of Soil Moisture North's MAC, as printed on the
+   map) and press Enter. The *Historical telemetry* panel switches to that sensor.
+2. Click **14:00 - 16:00** (today if that window has passed, otherwise yesterday).
+3. About 3,600 readings come back. **AVL nodes touched** reads about 3,613 / 43,333: the
+   query visited 8% of the tree, not all of it. Try **Last 15 min** for about 1%.
+
+Or from a shell (times are UTC; South African 14:00 is 12:00 UTC):
+
+```bash
+curl "http://localhost:5036/api/sensors/A4:CF:12:9B:04:7E/history/range?from=2026-11-10T12:00:00Z&to=2026-11-10T14:00:00Z"
+```
+
+`nodesVisited` against `treeSize` in the response shows the same pruning.
+
+**4. Route tracking by MAC, and the mesh healing around a failure.**
+
+1. In *Route tracker*, type `04:7F` (Soil Moisture South) and press Enter. Its route lights
+   up green on the map: 11 hops, energy about 97.7, against 4 hops and about 209.4 for the
+   fewest-hop route.
+2. In **What-if: take a node down**, pick **Root Zone pH**. Status turns **rerouted**, the
+   failed hop is struck through, and the route now runs through the Roof Vent.
+3. Add **Greenhouse Roof Vent** as well. Both bridges to the field are gone: the four field
+   nodes turn amber (**stranded**), and *Fix first* names the two repairs.
+4. Click **Clear what-if**. What-if never touches the real mesh.
+
+**5. A real outage, end to end.**
+
+```bash
+curl -X POST "http://localhost:5036/api/sensors/A4:CF:12:9B:05:12/unplug?seconds=60"
+```
+
+Within about 20 seconds the Part 2 silence sweep marks Root Zone pH as down, and on the
+next 5-second refresh the map crosses it out and redraws the routing tree around it.
+
+**6. BFS reachability straight from the API.**
+
+```bash
+curl "http://localhost:5036/api/mesh/reachability?without=A4:CF:12:9B:05:12,DC:A6:32:77:11:02"
+```
+
+`stranded` lists the four field nodes: running, but cut off.
 
 ---
 
@@ -187,9 +281,7 @@ ranking in *Suggest the pump after a moisture alert*.
 
 ## Using the console
 
-1. **Gateway** (`/`) - landing page with the three architectural pillars. Pillars 1
-   (ingestion) and 2 (command stream) are live; pillar 3 (mesh routing) is visibly locked
-   until the final Portfolio of Evidence.
+1. **Gateway** (`/`) - landing page with the three architectural pillars, all live.
    The header shows a real measured round-trip to the API, refreshed every 10 seconds.
 2. **Ingestion** (`/ingestion`) - register a node (MAC, display name, deployment path,
    sensor category, publish interval, threshold), attach a config file, hardware log or
@@ -201,6 +293,10 @@ ranking in *Suggest the pump after a moisture alert*.
 4. **Command stream** (`/commands`) - the live feed, category and alert-state filters,
    manual override commands with Undo, ingest queue depth, the sensor timeline and the
    suggested actions. Feed and filters survive navigation to the other pages.
+5. **Mesh routing** (`/topology`) - the live mesh map with the power-efficient routing tree
+   (MST) highlighted and down or stranded nodes marked; a route tracker (click a node or
+   search by MAC) with what-if outages; and a historical telemetry log that queries a
+   sensor's AVL tree for any time window. Refreshes every 5 seconds.
 
 ### Sensor categories
 
@@ -657,6 +753,335 @@ threshold, at the crossing time the line predicts.
 
 ---
 
+## How the network topology feature works
+
+The topology page answers three questions an operator of a large ESP32 mesh has:
+*what did this sensor read over a given period*, *can every node still reach the gateway,
+and how*, and *which links should packets use to spend the least energy*. Each needs a
+different data structure, and each was chosen because the obvious alternative stops
+scaling as the mesh and its history grow.
+
+| Question | Structure | Where |
+|---|---|---|
+| What did this sensor read between 14:00 and 16:00? | **AVL tree** (self-balancing BST) | [`AvlTree.cs`](ST10439147_PROG7312_SmartX_POE/SmartX.Shared/Collections/AvlTree.cs), used by [`TelemetryStore`](ST10439147_PROG7312_SmartX_POE/ST10439147_PROG7312_SmartX_POE/Services/TelemetryStore.cs) |
+| What is connected to what, and how strongly? | **Graph** (weighted adjacency list) | [`MeshGraph.cs`](ST10439147_PROG7312_SmartX_POE/SmartX.Shared/Topology/MeshGraph.cs), owned by [`MeshNetwork`](ST10439147_PROG7312_SmartX_POE/ST10439147_PROG7312_SmartX_POE/Services/MeshNetwork.cs) |
+| Which nodes can reach the gateway, and which are cut off? | **Breadth-first search** | `MeshGraph.BreadthFirst` |
+| Which link out of the tree so far is cheapest? | **Binary min-heap** | [`MinHeap.cs`](ST10439147_PROG7312_SmartX_POE/SmartX.Shared/Collections/MinHeap.cs) |
+| Which links connect everything for the least energy? | **Minimum spanning tree** (Prim's) | `MeshGraph.MinimumSpanningTree` |
+
+### How performance scales
+
+n = readings in one sensor's history, k = readings a query returns, V = mesh nodes, E = radio links.
+
+| Operation | With the structure used | With the obvious alternative |
+|---|---|---|
+| File a reading under its timestamp | AVL insert: **O(log n)** | Sorted `List<T>` insert: O(n) shifts. Plain BST fed near-sorted timestamps: O(n), it degenerates into a list |
+| Readings between two times | AVL range query: **O(log n + k)** | Scan the history: O(n), whatever the window |
+| Drop the oldest reading | AVL remove-min: **O(log n)** | `List<T>.RemoveAt(0)`: O(n) |
+| List one node's neighbours | Adjacency list: **O(degree)** | Adjacency matrix: O(V) per row |
+| Who can reach the gateway? | BFS: **O(V + E)** | - |
+| Cheapest link leaving the tree | Min-heap pop: **O(log E)** | Scan every candidate link: O(E) |
+| Minimum spanning tree | Prim's with the heap: **O(E log E)** | Prim's without a heap: O(V × E) |
+| A node's route home | Follow parent pointers: **O(depth)** | Search the graph again |
+
+Measured on the running gateway (one soil sensor, 43,333 readings in its tree):
+
+| Window | Readings returned | Tree nodes touched | Share of the tree |
+|---|---|---|---|
+| Last 15 minutes | 427 | 439 | **1.0 %** |
+| 14:00 - 16:00 | 3,600 | 3,613 | **8.3 %** |
+| Last 24 hours | ~43,200 | 43,204 | ~100 % (the window is the whole history) |
+
+The tree's height was **16**: the shortest any binary tree holding 43,333 keys can be
+(⌈log₂ 43,334⌉ = 16). A plain BST fed the same near-sorted timestamps would be about
+43,000 levels deep.
+
+### AVL tree: historical telemetry queries
+
+**Role.** Every sensor has its own AVL tree of readings, keyed by `(timestamp, arrival
+sequence)`. The live ingest path files every reading into it
+([`TelemetryStore.LogHistory`](ST10439147_PROG7312_SmartX_POE/ST10439147_PROG7312_SmartX_POE/Services/TelemetryStore.cs#L207)),
+the simulator seeds a day of history into it at boot, and the *Historical telemetry* panel
+and `GET /api/sensors/{id}/history/range` read from it. The sequence in the key keeps two
+readings with the same timestamp from overwriting each other.
+
+**Why a self-balancing tree.** Readings arrive in almost perfect timestamp order. That is
+the worst case for a plain binary search tree: every new key is the largest so far, so it
+always goes right, and the "tree" becomes a linked list where every insert and lookup is
+O(n). An AVL tree keeps the heights of every node's two subtrees within one of each other.
+After each insert it walks back up and rotates wherever that rule broke, so the tree never
+gets deeper than about 1.44 log₂ n:
+
+```csharp
+// SmartX.Shared/Collections/AvlTree.cs
+private static Node Rebalance(Node node)
+{
+    UpdateHeight(node);
+    var balance = BalanceOf(node);   // height(left) - height(right)
+
+    if (balance > 1)
+    {
+        if (BalanceOf(node.Left!) < 0) node.Left = RotateLeft(node.Left!);    // LR
+        return RotateRight(node);                                              // LL
+    }
+
+    if (balance < -1)
+    {
+        if (BalanceOf(node.Right!) > 0) node.Right = RotateRight(node.Right!); // RL
+        return RotateLeft(node);                                               // RR
+    }
+
+    return node;
+}
+```
+
+**Why range queries are fast.** The range query walks the tree in key order, but only goes
+into a subtree that could hold a key inside the window. Everything left of a node is
+smaller than it, and everything right is larger, so one comparison rules out a whole
+subtree:
+
+```csharp
+// SmartX.Shared/Collections/AvlTree.cs
+private static void Collect(Node? node, TKey from, TKey to, List<TValue> into, ref int visited)
+{
+    if (node is null) return;
+    visited++;
+
+    var atOrAfterFrom = node.Key.CompareTo(from) >= 0;
+    var atOrBeforeTo = node.Key.CompareTo(to) <= 0;
+
+    // Only go left if this key is still at or past `from` - everything left is smaller.
+    if (atOrAfterFrom) Collect(node.Left, from, to, into, ref visited);
+    if (atOrAfterFrom && atOrBeforeTo) into.Add(node.Value);
+    // Only go right if this key is still at or before `to` - everything right is larger.
+    if (atOrBeforeTo) Collect(node.Right, from, to, into, ref visited);
+}
+```
+
+The query touches the k readings it returns plus about one path down the tree on each
+side of the window: O(log n + k). `visited` is returned with every response, which is
+where the "nodes touched" figures above come from. The results already come out in
+timestamp order, so nothing needs sorting.
+
+**Bounded.** Each tree holds at most 50,000 readings (a day at a 2-second interval). Past
+that, `TryRemoveMin` drops the oldest, rebalancing on the way back up, in O(log n).
+
+**Why not the Part 2 `SortedDictionary`?** The sensor timeline from Part 2 is still there,
+holding the last 240 readings for the dashboard's graph. .NET's `SortedDictionary` is a
+red-black tree internally, but it exposes no range query: getting 14:00 to 16:00 out of it
+means enumerating from the start. Writing the tree here is what makes the pruned range
+query possible.
+
+### Graph: the mesh as an adjacency list
+
+**Role.** The physical mesh is an undirected, weighted graph. Each vertex is an ESP32 node
+(keyed by its MAC) or the central gateway, and each edge is a radio link the two nodes can
+hear each other over. `MeshSimulator.LinkMesh` reports the seeded farm's 23 links the way
+real ESP-WIFI-MESH or Zigbee nodes report their neighbours. `MeshNetwork` keeps the graph
+in step with the device registry: a deleted node leaves with all its links, and a node
+registered from the dashboard is linked to the nodes in its deployment area, so it never
+appears as an island.
+
+The farm is deliberately a mesh, not a star. Only the pump house can hear the gateway
+directly. The greenhouse reaches it through the flow meter or the roof array, and the
+field beds only through the greenhouse, so every far node has at least two ways home.
+
+**Why an adjacency list.** Mesh nodes hear only a handful of neighbours, so the graph is
+sparse: 14 vertices but only 23 links. An adjacency matrix would be 14 × 14 = 196 cells,
+almost all of them "no link", and listing one node's neighbours would mean scanning a
+whole row. The adjacency list (`Dictionary<string, List<MeshLink>>`) stores only the
+46 link entries that exist (23 links, one at each end) and hands back a node's neighbours
+directly, which is the one operation BFS, Prim's and Dijkstra all repeat.
+
+```csharp
+// SmartX.Shared/Topology/MeshGraph.cs
+public void Connect(string a, string b, int rssiDbm)
+{
+    ...
+    var cost = CostOf(rssiDbm);
+    var added = Upsert(_adjacency[a], new MeshLink(a, b, rssiDbm, cost));
+    Upsert(_adjacency[b], new MeshLink(b, a, rssiDbm, cost));   // radio works both ways
+    if (added) LinkCount++;
+}
+```
+
+**Edge weights are energy.** RSSI is measured in dBm, a log scale: every 10 dB weaker
+means ten times less power arrives, so the radio has to transmit about ten times harder
+to be heard. The edge weight is that relative transmit energy:
+
+```csharp
+// SmartX.Shared/Topology/MeshGraph.cs - a -50 dBm link costs 1, -60 costs 10, -70 costs 100
+public static double CostOf(int rssiDbm) => Math.Round(Math.Pow(10, (ReferenceRssi - rssiDbm) / 10.0), 2);
+```
+
+Adding these up along a route gives its total energy, which is what turns "most
+power-efficient route" into something that can be calculated.
+
+### Breadth-first search: reachability, outages and routes
+
+**Role.** `GET /api/mesh/reachability` runs BFS from the gateway with every down node
+removed, and sorts every node into **reachable** (with its hop count), **down** (silent,
+from the Part 2 disconnect `HashSet`) or **stranded** (still running, but every path it
+had ran through a down node). `GET /api/mesh/route/{mac}` uses the same search to trace a
+node's route by MAC address.
+
+```csharp
+// SmartX.Shared/Topology/MeshGraph.cs
+var queue = new Queue<string>();
+queue.Enqueue(root);
+hops[root] = 0;
+
+while (queue.TryDequeue(out var current))
+{
+    order.Add(current);
+
+    foreach (var link in _adjacency[current])
+    {
+        if (hops.ContainsKey(link.To) || blocked.Contains(link.To)) continue;
+
+        hops[link.To] = hops[current] + 1;
+        parent[link.To] = current;
+        queue.Enqueue(link.To);
+    }
+}
+```
+
+**Why BFS.** BFS explores in rings: everything one hop away, then everything two hops
+away, and so on. The first time it reaches a node is therefore along a fewest-hop path,
+so the hop count is exact and the `parent` pointers form a shortest-hop route back to the
+gateway. Each node is queued once (the `hops` dictionary doubles as the visited set) and
+each link is looked at twice, once from each end: O(V + E).
+
+**Outages for free.** A down node is never visited and never passed through, because a
+dead ESP32 cannot relay a packet. Any node whose only way home ran through it is never
+reached, which is exactly the "stranded" list. No separate algorithm is needed. With
+Root Zone pH and the Greenhouse Roof Vent both down, BFS strands the four field nodes; with
+only pH down, it finds the second bridge through the Roof Vent and strands nobody.
+
+**Routes.** `BfsTree.PathFrom(id)` follows `parent` from a node back to the gateway, in
+O(depth). When a down node is on a route and a detour exists, the report says
+**Rerouted** and gives the new next hop. When none exists, it says **Stranded** and lists
+which down nodes would each reconnect it if repaired.
+
+### Binary min-heap: the priority queue Prim's and Dijkstra need
+
+**Role.** Prim's algorithm keeps asking "which link leaving the tree so far is the
+cheapest?", and Dijkstra's keeps asking "which unsettled node is closest?". A min-heap
+answers both in O(log n) per question instead of scanning every candidate.
+
+The Part 2 ingest queue uses .NET's built-in `PriorityQueue`. This one is written by hand
+so the heap mechanics are visible.
+
+**How it works.** A binary heap is a complete binary tree in which every parent's priority
+is at most its children's, so the smallest item is always at the top. It is stored in an
+array with no node objects: the item at index `i` has its children at `2i + 1` and
+`2i + 2` and its parent at `(i - 1) / 2`. Because the tree fills level by level, the array
+has no gaps and the height is always ⌊log₂ n⌋ + 1.
+
+```csharp
+// SmartX.Shared/Collections/MinHeap.cs
+// A new item at the bottom swaps with its parent while it is smaller.
+private void SiftUp(int index)
+{
+    while (index > 0)
+    {
+        var parent = (index - 1) / 2;
+        if (!Less(index, parent)) return;
+
+        Swap(index, parent);
+        index = parent;
+    }
+}
+```
+
+`Push` appends at the end and sifts up. `TryPop` takes the root, moves the last item into
+its place and sifts it down. Each sift does at most one swap per level, so both are
+O(log n).
+
+**AVL tree vs heap.** Both are trees, built for different jobs. The AVL tree keeps
+*everything* in order, so it can answer "all readings between 14:00 and 16:00". The heap
+only guarantees the *minimum* is on top. That is a weaker promise, but it is cheaper to
+keep, and it is all Prim's needs.
+
+### Minimum spanning tree: the power-efficient routing tree
+
+**Role.** The 23 radio links are more than the mesh needs: connecting 14 vertices without
+loops takes exactly 13. Of all the ways to choose those 13, the minimum spanning tree is
+the one with the lowest total cost, and since the cost is transmit energy, the MST is the
+cheapest set of links that keeps every node connected to the gateway. Packets are routed
+along it: the next hop the route tracker shows comes from the MST, and the tree is rebuilt
+without a node whenever it goes down.
+
+**Prim's algorithm, on the heap.**
+
+```csharp
+// SmartX.Shared/Topology/MeshGraph.cs
+void Take(string id)
+{
+    inTree.Add(id);
+    order.Add(id);
+    foreach (var link in _adjacency[id])
+        if (!inTree.Contains(link.To) && !blocked.Contains(link.To))
+            heap.Push(link, (link.Cost, sequence++));
+}
+
+Take(root);
+
+while (heap.TryPop(out var cheapest, out _))
+{
+    if (inTree.Contains(cheapest.To)) continue;   // stale: would close a loop
+
+    edges.Add(cheapest);
+    parent[cheapest.To] = cheapest.From;
+    Take(cheapest.To);
+}
+```
+
+Start with only the gateway and push its links. Pop the cheapest: if its far end is
+already in the tree it would close a loop, so skip it; otherwise take the link and push
+the new node's links. Taking the cheapest link that crosses from inside the tree to
+outside is always part of *some* minimum spanning tree (the cut property), so this greedy
+choice never has to be undone.
+
+A node can be on the heap several times, once through each link that reaches it. A heap
+cannot search for an old entry to update it, so stale entries are simply skipped when
+they are popped ("lazy deletion"). The heap never holds more than E entries, so the whole
+run is O(E log E). Without the heap, each step would scan every candidate link: O(V × E).
+
+**What it saves, measured on the seeded farm.**
+
+| Routing choice | Total energy of the links used |
+|---|---|
+| Keep every link active | 456.14 |
+| Fewest-hop tree (BFS) | 313.66 |
+| **Minimum spanning tree (Prim's)** | **106.03** |
+
+The MST connects the same 13 nodes for about a third of the fewest-hop tree's energy.
+It prefers several strong hops to one weak one: Main Line Flow reaches the gateway through
+the two pumps (0.32 + 0.16 + 1 = 1.48) rather than directly (1.58), and each unavoidable
+weak long hop into the greenhouse or the field appears only once. When the Rainwater Tank
+goes down, the tree re-forms around it at 99.72.
+
+**The honest trade-off.** An MST minimises the energy of the *whole network*, not of
+every individual route. As a yardstick, `MeshGraph.CheapestCosts` runs Dijkstra's
+algorithm (on the same min-heap) to find each node's own cheapest possible route.
+On the seeded farm, **12 of the 13 nodes** get exactly their cheapest route on the MST.
+The exception, Soil Moisture South, pays 97.72 against a possible 96.32 (about 1.5% more),
+the price of sharing one tree. In exchange each node only needs to know one parent, and the
+network as a whole uses the least energy. The route tracker shows both numbers for every
+node.
+
+Routing for energy also means longer chains: Soil Moisture South's MST route is 11 hops,
+against 4 for the fewest-hop route at more than twice the energy (209.38). More hops mean
+more latency and more relay work for the nodes in the middle.
+
+**How the algorithms are verified.** The self-check compares Prim's against an independent
+Kruskal's (union-find) on 25 random meshes, and Dijkstra's against an independent
+Bellman-Ford. Two different algorithms agreeing on every mesh is strong evidence that both
+are right.
+
+---
+
 ## Architecture
 
 ```
@@ -666,15 +1091,23 @@ ST10439147_PROG7312_SmartX_POE/
 │   ├── Telemetry/TelemetryPacket.cs      generic wrapper, T : struct
 │   ├── Telemetry/SensorReading.cs        numeric half, T : struct, INumber<T>
 │   ├── Collections/CircularTelemetryBuffer.cs   custom ring buffer
+│   ├── Collections/AvlTree.cs            self-balancing BST, range queries   (Part 3)
+│   ├── Collections/MinHeap.cs            array-backed binary min-heap        (Part 3)
 │   ├── Ingestion/TelemetryBatchArchive.cs       jagged float[][] → List<T>
 │   ├── Topology/TopologyValidator.cs     recursive validation
+│   ├── Topology/MeshGraph.cs             graph, BFS, Prim's MST, Dijkstra    (Part 3)
 │   └── Diagnostics/SelfCheck.cs          the runnable check
 ├── ST10439147_PROG7312_SmartX_POE     ← Minimal API (assembly SmartX.Api): SignalR hub,
 │   │                                    mesh simulator, attachments
 │   └── Services/IngestQueue.cs, IngestWorker.cs   Queue<T> + PriorityQueue lanes, worker
 │       Services/CommandService.cs                 Stack<T> override history, Undo
 │       Services/PredictionService.cs              pair counts, trend flags, suggestions
+│       Services/TelemetryStore.cs                 registry, timelines, AVL history trees
+│       Services/MeshNetwork.cs                    the live mesh graph: reachability,
+│                                                  routes, MST report             (Part 3)
 └── SmartX.Client                      ← Blazor WebAssembly console
+    ├── Pages/Topology.razor              the mesh routing page                (Part 3)
+    └── Shared/MeshMap.razor, RouteHops.razor, HistoryLog.razor               (Part 3)
 ```
 
 `SmartX.Shared` being referenced by both projects is the load-bearing decision:
@@ -695,6 +1128,11 @@ DTO translation layer and no chance of the two sides drifting.
 | **HashSet** | `AnomalyEngine` keeps a `HashSet<string>` of disconnected nodes and another of open error states. `Add` returning `false` means the fault is already known, so the repeat alert is skipped: a node that stays silent raises one disconnect alert, not one per sweep. `GET /api/faults` shows both sets and the count of duplicates skipped. |
 | **Predictive actions** | `PredictionService` logs every search and command with the faults open at that moment, and counts "after event X, the operator did Y" pairs in a `Dictionary<string, Dictionary<string, int>>`. When X recurs, the follow-ups seen at least twice are pushed to the dashboard before the operator searches. A least-squares line over each device's recent readings flags the ones projected to cross their threshold within three minutes. |
 | **File upload** | `MultipartReader` streaming (never `IFormFile` buffering), magic-byte content sniffing, path-traversal stripping, a 25 MB ceiling enforced mid-flight, and AES-256-GCM at rest with per-chunk nonces and authenticated chunk indices. |
+| **Trees (AVL)** | `AvlTree<TKey,TValue>` stores each sensor's timestamped history, rebalancing with the four rotation cases so near-sorted timestamps cannot degrade it into a list. `Range` prunes every subtree outside the window: O(log n + k). Explained in [*AVL tree*](#avl-tree-historical-telemetry-queries). |
+| **Graph** | `MeshGraph`: the mesh as an undirected, weighted adjacency list. Vertices are ESP32 nodes and the gateway; edges are radio links weighted by transmit energy derived from RSSI. Explained in [*Graph*](#graph-the-mesh-as-an-adjacency-list). |
+| **Graph traversal (BFS)** | `MeshGraph.BreadthFirst` finds every node the gateway can reach with its hop count, which are down, and which are stranded; its parent pointers give each node's route. Explained in [*Breadth-first search*](#breadth-first-search-reachability-outages-and-routes). |
+| **Heap** | `MinHeap<TElement,TPriority>`, array-backed, O(log n) push and pop. Drives Prim's and Dijkstra's. Explained in [*Binary min-heap*](#binary-min-heap-the-priority-queue-prims-and-dijkstra-need). |
+| **Minimum spanning tree** | `MeshGraph.MinimumSpanningTree`: Prim's algorithm on the min-heap, O(E log E). Packets route along it; it re-forms around down nodes. Checked against Kruskal's. Explained in [*Minimum spanning tree*](#minimum-spanning-tree-the-power-efficient-routing-tree). |
 | **Engagement** | The strategy chosen in Part 1 Task 1: anomaly-first visual encoding, severity-ranked rail, z-score spike detection against a rolling baseline, a *separate* silence timer for disconnects, and suppression-not-deletion of repeatedly dismissed alerts. |
 
 ---
@@ -715,6 +1153,7 @@ Base path `/api`. Enums travel as names.
 | `DELETE` | `/sensors/{id}` | Deregister |
 | `GET` | `/sensors/{id}/history?samples=n` | Typed `TelemetryPacket<T>` history straight off the ring |
 | `GET` | `/sensors/{id}/archive` | Float sensors only: jagged staging rows, the shape of their rectangular projection, the newest flushed packets |
+| `GET` | `/sensors/{id}/history/range?from=&to=` | Every reading in the window from the sensor's AVL tree, with `treeSize`, `treeHeight` and `nodesVisited`. Defaults to the last hour; 400 if `from` is after `to` |
 | `GET` | `/sensors/{id}/timeline?samples=n` | The sensor's log in timestamp order, each point with its arrival `sequence` |
 | `POST` | `/sensors/{id}/timeline/scramble?count=` | Test trigger: receive backdated readings for the sensor in shuffled order |
 | `POST` | `/telemetry` | Ingest one reading `{ sensorId, value, timestamp? }` - queued, then ingested by the background worker |
@@ -739,9 +1178,17 @@ Base path `/api`. Enums travel as names.
 | `GET` | `/topology` | The seeded deployment tree |
 | `POST` | `/topology/validate` | Recursive validation of a supplied tree |
 | `GET` | `/topology/stress?depth=` | Depth-guard demonstration |
+| `GET` | `/mesh` | The radio mesh graph: every vertex and every link once, with RSSI and cost |
+| `GET` | `/mesh/reachability?from=&subnet=&without=` | BFS from the gateway (or `from`): reachable nodes with hop counts, down nodes, stranded nodes. `subnet` narrows the report to a deployment path, e.g. `Facility A/Zone 1` |
+| `GET` | `/mesh/route/{id}?without=` | One node's route by MAC: status, usual and current MST route, fewest-hop route, next hop, Dijkstra's cheapest cost, and repairs for a stranded node |
+| `GET` | `/mesh/mst?without=` | Prim's minimum spanning tree of the live mesh, priced against the BFS tree and the full mesh |
 | `POST` | `/sensors/{id}/attachments` | Streamed multipart upload |
 | `GET` | `/sensors/{id}/attachments` | Attachment metadata for a node |
 | `GET` | `/attachments/{attachmentId}` | Decrypt and download |
+
+On the `/mesh` routes, "down" means the live disconnect set from `/faults`. `without` adds
+comma-separated MACs to treat as down for that one request (a what-if that touches nothing
+on the real mesh), e.g. `?without=A4:CF:12:9B:05:12,DC:A6:32:77:11:02`.
 
 Real-time channel: SignalR hub at `/hubs/telemetry`, pushing `tick`, `alertRaised`,
 `alertDismissed`, `sensorsChanged` and `suggestionReady`.
@@ -799,12 +1246,21 @@ are lost, and the 13 seeded nodes come back. Uploaded files stay on disk, encryp
 their metadata is in memory too, so after a restart the API no longer lists or serves
 them. What the predictive engine has learned is in memory as well, so its counters start
 empty after a restart and the moisture-then-pump pattern has to be taught again.
-Pillar 3 (Network Topology and Mesh Routing) and persistence are out of scope for this
-part and arrive in the final PoE.
+
+The **mesh links** are simulated too: `MeshSimulator.LinkMesh` reports each node's
+neighbours and RSSI the way a real ESP-WIFI-MESH or Zigbee node would. A node registered
+from the dashboard has no reported links, so `MeshNetwork` links it to the nodes in its
+deployment area. Real hardware would report its actual neighbours instead.
+
+The **history trees** keep up to 50,000 readings per sensor (a day at a 2-second
+interval) and are re-seeded with 24 hours of mock history at every boot. A history query
+returns every reading in the window, so a full day (about 43,000 readings) takes around
+3 seconds to send. Server-side downsampling is the upgrade if whole-day views need to be
+fast; the client already downsamples the chart.
 
 # References
 
-References follow the IEEE style. Numbers match the `// Reference [N]` comments in the source and section 27 of [HOW_IT_WORKS.md](HOW_IT_WORKS.md).
+References follow the IEEE style. Numbers match the `// Reference [N]` comments in the source. [1]–[57] are also listed in section 27 of [HOW_IT_WORKS.md](HOW_IT_WORKS.md); [58]–[67] were added for the final PoE.
 
 [1] Microsoft, "Generics in C#," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/csharp/fundamentals/types/generics  
 [2] Microsoft, "How to serialize and deserialize JSON using System.Text.Json," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/standard/serialization/system-text-json/how-to  
@@ -863,3 +1319,13 @@ References follow the IEEE style. Numbers match the `// Reference [N]` comments 
 [55] Microsoft, "File.Move Method," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/api/system.io.file.move  
 [56] Microsoft, "File.WriteAllTextAsync Method," Microsoft Learn. Accessed: Nov. 2, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/api/system.io.file.writealltextasync  
 [57] Microsoft, "Task.Run Method," Microsoft Learn. Accessed: Nov. 2, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/api/system.threading.tasks.task.run  
+[58] G. M. Adel'son-Vel'skii and E. M. Landis, "An algorithm for the organization of information," *Soviet Mathematics Doklady*, vol. 3, pp. 1259–1263, 1962.  
+[59] Wikipedia, "AVL tree," Wikipedia, The Free Encyclopedia. Accessed: Nov. 10, 2026. [Online]. Available: https://en.wikipedia.org/wiki/AVL_tree  
+[60] T. H. Cormen, C. E. Leiserson, R. L. Rivest, and C. Stein, *Introduction to Algorithms*, 4th ed. Cambridge, MA, USA: MIT Press, 2022.  
+[61] J. W. J. Williams, "Algorithm 232: Heapsort," *Communications of the ACM*, vol. 7, no. 6, pp. 347–348, 1964.  
+[62] J. B. Kruskal, "On the shortest spanning subtree of a graph and the traveling salesman problem," *Proceedings of the American Mathematical Society*, vol. 7, no. 1, pp. 48–50, 1956.  
+[63] R. Bellman, "On a routing problem," *Quarterly of Applied Mathematics*, vol. 16, no. 1, pp. 87–90, 1958.  
+[64] Espressif Systems, "ESP-WIFI-MESH," ESP-IDF Programming Guide. Accessed: Nov. 10, 2026. [Online]. Available: https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-guides/esp-wifi-mesh.html  
+[65] R. C. Prim, "Shortest connection networks and some generalizations," *Bell System Technical Journal*, vol. 36, no. 6, pp. 1389–1401, 1957.  
+[66] E. W. Dijkstra, "A note on two problems in connexion with graphs," *Numerische Mathematik*, vol. 1, pp. 269–271, 1959.  
+[67] T. S. Rappaport, *Wireless Communications: Principles and Practice*, 2nd ed. Upper Saddle River, NJ, USA: Prentice Hall, 2002.  

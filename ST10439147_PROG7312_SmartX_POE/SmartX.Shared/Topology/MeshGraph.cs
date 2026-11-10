@@ -26,8 +26,8 @@ public sealed record MeshLink(string From, string To, int RssiDbm, double Cost);
 ///
 /// <para>Not thread-safe: the owning service locks around it.</para>
 /// </summary>
-// Reference: Cormen, T. H. et al. (2022). Introduction to Algorithms, 4th ed., ch. 20 "Elementary Graph Algorithms". MIT Press.
-// Reference: Espressif. ESP-WIFI-MESH Programming Guide. https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-guides/esp-wifi-mesh.html
+// Reference [60]: Cormen, T. H. et al. (2022). Introduction to Algorithms, 4th ed., ch. 20 "Elementary Graph Algorithms". MIT Press.
+// Reference [64]: Espressif. ESP-WIFI-MESH Programming Guide. https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-guides/esp-wifi-mesh.html
 public sealed class MeshGraph
 {
     /// <summary>The vertex id of the central gateway every route ends at.</summary>
@@ -123,8 +123,8 @@ public sealed class MeshGraph
     /// root. Each vertex is queued once and each link looked at twice (once from each end):
     /// O(V + E).</para>
     /// </summary>
-    // Reference: Cormen, T. H. et al. (2022). Introduction to Algorithms, 4th ed., s. 20.2 "Breadth-first search". MIT Press.
-    // Reference: Microsoft. Queue<T> Class. https://learn.microsoft.com/dotnet/api/system.collections.generic.queue-1
+    // Reference [60]: Cormen, T. H. et al. (2022). Introduction to Algorithms, 4th ed., s. 20.2 "Breadth-first search". MIT Press.
+    // Reference [52]: Microsoft. Queue<T> Class. https://learn.microsoft.com/dotnet/api/system.collections.generic.queue-1
     public BfsTree BreadthFirst(string root, IReadOnlySet<string>? down = null)
     {
         var order = new List<string>();
@@ -181,8 +181,8 @@ public sealed class MeshGraph
     /// <para>Each tree link is returned pointing away from the root (<c>From</c> is the
     /// parent), so the result is a routing tree rooted at the gateway.</para>
     /// </summary>
-    // Reference: Prim, R. C. (1957). Shortest connection networks and some generalizations. Bell System Technical Journal, 36(6), 1389-1401.
-    // Reference: Cormen, T. H. et al. (2022). Introduction to Algorithms, 4th ed., s. 21.2 "The algorithms of Kruskal and Prim". MIT Press.
+    // Reference [65]: Prim, R. C. (1957). Shortest connection networks and some generalizations. Bell System Technical Journal, 36(6), 1389-1401.
+    // Reference [60]: Cormen, T. H. et al. (2022). Introduction to Algorithms, 4th ed., s. 21.2 "The algorithms of Kruskal and Prim". MIT Press.
     public MstTree MinimumSpanningTree(string root, IReadOnlySet<string>? down = null)
     {
         var blocked = new HashSet<string>(down ?? new HashSet<string>(), StringComparer.OrdinalIgnoreCase);
@@ -233,7 +233,7 @@ public sealed class MeshGraph
     /// link costs the first time a node is popped is its cheapest, so later (stale) entries
     /// are skipped - the same lazy deletion as Prim's. O(E log E).</para>
     /// </summary>
-    // Reference: Dijkstra, E. W. (1959). A note on two problems in connexion with graphs. Numerische Mathematik, 1, 269-271.
+    // Reference [66]: Dijkstra, E. W. (1959). A note on two problems in connexion with graphs. Numerische Mathematik, 1, 269-271.
     public IReadOnlyDictionary<string, double> CheapestCosts(string root, IReadOnlySet<string>? down = null)
     {
         var blocked = new HashSet<string>(down ?? new HashSet<string>(), StringComparer.OrdinalIgnoreCase);
@@ -262,7 +262,7 @@ public sealed class MeshGraph
     /// -70 costs 100. Summing these along a route gives its total energy, which is what the
     /// power-efficient routing in section 4 minimises.
     /// </summary>
-    // Reference: Rappaport, T. S. (2002). Wireless Communications: Principles and Practice, 2nd ed., ch. 4 "Path loss". Prentice Hall.
+    // Reference [67]: Rappaport, T. S. (2002). Wireless Communications: Principles and Practice, 2nd ed., ch. 4 "Path loss". Prentice Hall.
     public static double CostOf(int rssiDbm) => Math.Round(Math.Pow(10, (ReferenceRssi - rssiDbm) / 10.0), 2);
 }
 //----------------------------------------------------------------------------------------------------------------------//
