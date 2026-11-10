@@ -38,7 +38,7 @@ public static class SelfCheck
         return log;
     }
     //----------------------------------------------------------------------------------------------------------------------//
-    // Reference: Kruskal, J. B. (1956). On the shortest spanning subtree of a graph and the traveling salesman problem. Proc. AMS, 7(1), 48-50.
+    // Reference [62]: Kruskal, J. B. (1956). On the shortest spanning subtree of a graph and the traveling salesman problem. Proc. AMS, 7(1), 48-50.
     private static void PrimsMinimumSpanningTreeMatchesKruskal(List<string> log)
     {
         const string gw = MeshGraph.GatewayId;
@@ -91,7 +91,7 @@ public static class SelfCheck
         MstRoutesAgainstDijkstra(triangle, random, log);
     }
     //----------------------------------------------------------------------------------------------------------------------//
-    // Reference: Bellman, R. (1958). On a routing problem. Quarterly of Applied Mathematics, 16(1), 87-90.
+    // Reference [63]: Bellman, R. (1958). On a routing problem. Quarterly of Applied Mathematics, 16(1), 87-90.
     private static void MstRoutesAgainstDijkstra(MeshGraph triangle, Random random, List<string> log)
     {
         const string gw = MeshGraph.GatewayId;
@@ -177,7 +177,7 @@ public static class SelfCheck
         return total;
     }
     //----------------------------------------------------------------------------------------------------------------------//
-    // Reference: Cormen, T. H. et al. (2022). Introduction to Algorithms, 4th ed., ch. 6. MIT Press.
+    // Reference [60]: Cormen, T. H. et al. (2022). Introduction to Algorithms, 4th ed., ch. 6. MIT Press.
     private static void MinHeapAlwaysPopsTheSmallest(List<string> log)
     {
         var heap = new MinHeap<string, double>();
@@ -302,7 +302,7 @@ public static class SelfCheck
         log.Add("mesh graph: undirected adjacency list, no parallel edges, removal cleans both ends, cost x10 per 10 dB");
     }
     //----------------------------------------------------------------------------------------------------------------------//
-    // Reference: Wikipedia. AVL tree. https://en.wikipedia.org/wiki/AVL_tree
+    // Reference [59]: Wikipedia. AVL tree. https://en.wikipedia.org/wiki/AVL_tree
     private static void AvlTreeStaysBalancedAndAnswersRanges(List<string> log)
     {
         // Sorted keys are the worst case: a plain BST would end up 10,000 deep.

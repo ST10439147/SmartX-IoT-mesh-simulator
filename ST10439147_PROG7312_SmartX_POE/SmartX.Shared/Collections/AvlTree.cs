@@ -17,8 +17,8 @@ namespace SmartX.Shared.Telemetry;
 ///
 /// <para>Not thread-safe: the caller locks, the same as the sorted-dictionary timeline.</para>
 /// </summary>
-// Reference: Adelson-Velsky, G. and Landis, E. (1962). An algorithm for the organization of information.
-// Reference: Wikipedia. AVL tree. https://en.wikipedia.org/wiki/AVL_tree
+// Reference [58]: Adelson-Velsky, G. and Landis, E. (1962). An algorithm for the organization of information.
+// Reference [59]: Wikipedia. AVL tree. https://en.wikipedia.org/wiki/AVL_tree
 public sealed class AvlTree<TKey, TValue> where TKey : IComparable<TKey>
 {
     private sealed class Node(TKey key, TValue value)

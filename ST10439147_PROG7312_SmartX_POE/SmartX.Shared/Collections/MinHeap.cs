@@ -22,8 +22,8 @@ namespace SmartX.Shared.Telemetry;
 /// <para>Part 2's ingest queue uses .NET's built-in <c>PriorityQueue</c>; this one is
 /// written out by hand so the heap mechanics are visible. Not thread-safe.</para>
 /// </summary>
-// Reference: Cormen, T. H. et al. (2022). Introduction to Algorithms, 4th ed., ch. 6 "Heapsort" (s. 6.1-6.5). MIT Press.
-// Reference: Williams, J. W. J. (1964). Algorithm 232: Heapsort. Communications of the ACM, 7(6), 347-348.
+// Reference [60]: Cormen, T. H. et al. (2022). Introduction to Algorithms, 4th ed., ch. 6 "Heapsort" (s. 6.1-6.5). MIT Press.
+// Reference [61]: Williams, J. W. J. (1964). Algorithm 232: Heapsort. Communications of the ACM, 7(6), 347-348.
 public sealed class MinHeap<TElement, TPriority> where TPriority : IComparable<TPriority>
 {
     private readonly List<(TElement Element, TPriority Priority)> _items = [];
