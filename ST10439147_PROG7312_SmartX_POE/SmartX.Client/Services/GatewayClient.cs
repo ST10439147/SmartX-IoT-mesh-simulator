@@ -47,6 +47,82 @@ public sealed class GatewayClient(HttpClient http)
 
     public async Task<DeploymentNode?> GetTopologyAsync(CancellationToken ct = default)
         => await http.GetFromJsonAsync<DeploymentNode>("api/topology", SmartXJson.Options, ct);
+
+    /// <summary>The radio mesh graph: every node and link. Null if the gateway could not be reached.</summary>
+    public async Task<MeshView?> GetMeshAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            return await http.GetFromJsonAsync<MeshView>("api/mesh", SmartXJson.Options, ct);
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// BFS from the gateway (or <paramref name="from"/>): reachable, down and stranded nodes,
+    /// optionally narrowed to a <paramref name="subnet"/> and with <paramref name="without"/>
+    /// treated as down. Null if the gateway could not be reached or <paramref name="from"/> is unknown.
+    /// </summary>
+    public async Task<ReachabilityReport?> GetReachabilityAsync(
+        string? from = null, string? subnet = null, IEnumerable<string>? without = null, CancellationToken ct = default)
+    {
+        var query = new List<string>();
+        if (!string.IsNullOrWhiteSpace(from)) query.Add($"from={Uri.EscapeDataString(from)}");
+        if (!string.IsNullOrWhiteSpace(subnet)) query.Add($"subnet={Uri.EscapeDataString(subnet)}");
+        if (without?.Any() == true) query.Add($"without={Uri.EscapeDataString(string.Join(',', without))}");
+
+        try
+        {
+            return await http.GetFromJsonAsync<ReachabilityReport>(
+                "api/mesh/reachability" + (query.Count > 0 ? "?" + string.Join('&', query) : ""), SmartXJson.Options, ct);
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// The live mesh's minimum spanning tree (Prim's, from the gateway), priced against the
+    /// BFS tree and the full mesh, with <paramref name="without"/> treated as down. Null if the gateway could not be reached.
+    /// </summary>
+    public async Task<MstReport?> GetMstAsync(IEnumerable<string>? without = null, CancellationToken ct = default)
+    {
+        var url = "api/mesh/mst";
+        if (without?.Any() == true) url += $"?without={Uri.EscapeDataString(string.Join(',', without))}";
+
+        try
+        {
+            return await http.GetFromJsonAsync<MstReport>(url, SmartXJson.Options, ct);
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// One node's routes to the gateway, by MAC or id: the power-efficient MST route it uses,
+    /// the fewest-hop usual and current routes, and Dijkstra's cheapest cost for comparison,
+    /// with <paramref name="without"/> treated as down. Null if the gateway could not be reached or the node is unknown.
+    /// </summary>
+    public async Task<RouteReport?> GetRouteAsync(string macOrId, IEnumerable<string>? without = null, CancellationToken ct = default)
+    {
+        var url = $"api/mesh/route/{Uri.EscapeDataString(macOrId)}";
+        if (without?.Any() == true) url += $"?without={Uri.EscapeDataString(string.Join(',', without))}";
+
+        try
+        {
+            return await http.GetFromJsonAsync<RouteReport>(url, SmartXJson.Options, ct);
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+    }
 //----------------------------------------------------------------------------------------------------------------------//
     /// <summary>Registers a node. Field-level errors come straight back from the API's own validation.</summary>
     // Reference [17]: Microsoft. Handle errors in ASP.NET Core - problem details / ValidationProblem. Microsoft Learn.
@@ -232,6 +308,22 @@ public sealed class GatewayClient(HttpClient http)
         {
             return await http.GetFromJsonAsync<List<TimelinePoint>>(
                 $"api/sensors/{Uri.EscapeDataString(sensorId)}/timeline?samples={samples}", SmartXJson.Options, ct);
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Every reading between two times, from the sensor's AVL history tree. Null if the gateway could not be reached or the sensor is gone.</summary>
+    public async Task<HistoryRange?> GetHistoryRangeAsync(string sensorId, DateTimeOffset from, DateTimeOffset to, CancellationToken ct = default)
+    {
+        try
+        {
+            return await http.GetFromJsonAsync<HistoryRange>(
+                $"api/sensors/{Uri.EscapeDataString(sensorId)}/history/range" +
+                $"?from={Uri.EscapeDataString(from.ToString("O"))}&to={Uri.EscapeDataString(to.ToString("O"))}",
+                SmartXJson.Options, ct);
         }
         catch (HttpRequestException)
         {

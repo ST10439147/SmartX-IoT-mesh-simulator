@@ -58,7 +58,7 @@ public sealed class IngestWorker(
                 await hub.Clients.All.SendAsync(HubEvents.AlertRaised, alert, stoppingToken);
 
                 // The same event has come round again: push what the operator usually does next.
-                if (predictions.Suggest(alert) is { } suggestion)
+                if (await predictions.SuggestAsync(alert, stoppingToken) is { } suggestion)
                     await hub.Clients.All.SendAsync(HubEvents.SuggestionReady, suggestion, stoppingToken);
             }
             catch (OperationCanceledException)

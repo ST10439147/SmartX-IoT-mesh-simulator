@@ -13,7 +13,7 @@ using SmartX.Shared.Topology;
 // `dotnet run --project src/SmartX.Api -- --selftest` runs the data-structure and
 // crypto checks and exits. Non-zero means something is broken.
 if (args.Contains("--selftest"))
-    return SelfCheckRunner.Run();
+    return await SelfCheckRunner.RunAsync();
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -35,6 +35,7 @@ builder.Services.AddSingleton<AnomalyEngine>();
 builder.Services.AddSingleton<AttachmentService>();
 builder.Services.AddSingleton<IngestQueue>();
 builder.Services.AddSingleton<CommandService>();
+builder.Services.AddSingleton<MeshNetwork>();
 builder.Services.AddSingleton(services => new PredictionService(
     services.GetRequiredService<TelemetryStore>(), services.GetRequiredService<AnomalyEngine>(), "storage/predictions.json"));
 // Reference [23]: Microsoft. Background tasks with hosted services in ASP.NET Core. Microsoft Learn.
@@ -85,12 +86,12 @@ api.MapGet("/sensors/{id}", (string id, TelemetryStore store) =>
 // Operator search: case-insensitive substring over name, id, deployment path and category.
 // It runs on the gateway rather than filtering in the browser so every search is an event
 // the gateway sees - the predictive engine learns from them.
-api.MapGet("/search", ([FromQuery] string? q, TelemetryStore store, PredictionService predictions) =>
+api.MapGet("/search", async ([FromQuery] string? q, TelemetryStore store, PredictionService predictions) =>
 {
     if (string.IsNullOrWhiteSpace(q)) return Results.BadRequest(new { message = "Give a search term (q)." });
 
     var term = q.Trim();
-    predictions.Record(OperatorActionKind.Search, term);
+    await predictions.RecordAsync(OperatorActionKind.Search, term);
 
     return Results.Ok(store.Snapshots().Where(s =>
         s.DisplayName.Contains(term, StringComparison.OrdinalIgnoreCase)
@@ -252,7 +253,7 @@ api.MapGet("/commands/history", (CommandService commands) => Results.Ok(commands
 
 // Pins one actuator (sensorId) or every actuator of a kind (category) on or off.
 // "Shut all valves" is { "category": "IrrigationValve", "state": false }.
-api.MapPost("/commands", (CommandRequest request, TelemetryStore store, CommandService commands, PredictionService predictions) =>
+api.MapPost("/commands", async (CommandRequest request, TelemetryStore store, CommandService commands, PredictionService predictions) =>
 {
     List<SensorRegistration> targets;
 
@@ -283,15 +284,15 @@ api.MapPost("/commands", (CommandRequest request, TelemetryStore store, CommandS
         : $"Switch all {targets[0].Category.Spec().Label} devices {action}";
 
     var command = commands.Issue(label, targets.Select(s => s.Id), request.State);
-    predictions.Record(OperatorActionKind.Command, label);
+    await predictions.RecordAsync(OperatorActionKind.Command, label);
     return Results.Ok(command);
 });
 
-api.MapPost("/commands/undo", (CommandService commands, PredictionService predictions) =>
+api.MapPost("/commands/undo", async (CommandService commands, PredictionService predictions) =>
 {
     if (!commands.TryUndo(out var undone)) return Results.Conflict(new { message = "Nothing to undo." });
 
-    predictions.Record(OperatorActionKind.Command, $"Undo {undone!.Label}");
+    await predictions.RecordAsync(OperatorActionKind.Command, $"Undo {undone!.Label}");
     return Results.Ok(undone);
 });
 
@@ -299,33 +300,33 @@ api.MapPost("/commands/undo", (CommandService commands, PredictionService predic
 
 // Every search and command, newest first, with the alert (Category|AlertKind) that was
 // on the rail when it was made. A null context means nothing was alerting.
-api.MapGet("/predictions/log", (PredictionService predictions) => predictions.Log);
+api.MapGet("/predictions/log", (PredictionService predictions, CancellationToken ct) => predictions.LogAsync(ct));
 
 // Forgets everything learned so the engine can be shown learning from scratch.
-api.MapPost("/predictions/reset", (PredictionService predictions) =>
+api.MapPost("/predictions/reset", async (PredictionService predictions) =>
 {
-    predictions.Reset();
+    await predictions.ResetAsync();
     return Results.NoContent();
 });
 
 // The dictionary of counters: every event seen, each with its follow-ups ranked.
-api.MapGet("/predictions/pairs", (PredictionService predictions) => predictions.Pairs);
+api.MapGet("/predictions/pairs", (PredictionService predictions, CancellationToken ct) => predictions.PairsAsync(ct));
 
 // The suggestion for the alert that is driving the operator right now, so a dashboard
 // opened mid-alert still shows it. 204 when there is none. New ones are pushed as
 // HubEvents.SuggestionReady the moment their alert is raised.
-api.MapGet("/predictions/suggestion", (PredictionService predictions) =>
-    predictions.Current is { } suggestion ? Results.Ok(suggestion) : Results.NoContent());
+api.MapGet("/predictions/suggestion", async (PredictionService predictions, CancellationToken ct) =>
+    await predictions.CurrentAsync(ct) is { } suggestion ? Results.Ok(suggestion) : Results.NoContent());
 
 // Every learned event with its ranked follow-ups, open faults first; seeded on first run and kept across restarts.
-api.MapGet("/predictions/insights", (PredictionService predictions) => predictions.Insights());
+api.MapGet("/predictions/insights", (PredictionService predictions, CancellationToken ct) => predictions.InsightsAsync(ct));
 
 // Devices under their threshold but projected to cross it within the trend horizon, soonest first.
-api.MapGet("/predictions/trends", (PredictionService predictions) => predictions.TrendFlags());
+api.MapGet("/predictions/trends", (PredictionService predictions, CancellationToken ct) => predictions.TrendFlagsAsync(ct));
 
 // The top follow-ups to one event, e.g. ?context=SoilMoisture|ThresholdBreach&top=3.
-api.MapGet("/predictions/rank", ([FromQuery] string context, PredictionService predictions, [FromQuery] int top = 3) =>
-    predictions.Rank(context, Math.Clamp(top, 1, 20)));
+api.MapGet("/predictions/rank", ([FromQuery] string context, PredictionService predictions, CancellationToken ct, [FromQuery] int top = 3) =>
+    predictions.RankAsync(context, Math.Clamp(top, 1, 20), ct));
 
 // Returns the typed packets themselves, so TelemetryPacket<T> is what crosses the wire
 // rather than a flattened DTO. The client deserialises straight back into the same type.
@@ -340,6 +341,24 @@ api.MapGet("/sensors/{id}/history", (string id, TelemetryStore store, [FromQuery
         PayloadKind.Boolean => Results.Ok(store.Booleans(id)?.TakeLast(samples) ?? []),
         _ => Results.NotFound()
     };
+});
+
+// A time-range query against the sensor's AVL history tree, e.g.
+// GET /api/sensors/A4:CF:12:9B:04:7E/history/range?from=2026-11-07T14:00:00Z&to=2026-11-07T16:00:00Z
+// Both bounds are optional: `to` defaults to now and `from` to an hour before `to`.
+// The response carries the tree's size, height and the nodes the query touched, so the
+// pruning is visible rather than claimed.
+// ponytail: returns every point in range (a full day is ~43k for a 2s sensor). Downsample
+// server-side if the topology page ever has to chart whole days.
+api.MapGet("/sensors/{id}/history/range", (string id, TelemetryStore store, [FromQuery] DateTimeOffset? from, [FromQuery] DateTimeOffset? to) =>
+{
+    if (!store.TryGet(id, out var sensor)) return Results.NotFound();
+
+    var end = to ?? DateTimeOffset.UtcNow;
+    var start = from ?? end.AddHours(-1);
+    if (start > end) return Results.BadRequest(new { error = "`from` must not be after `to`." });
+
+    return Results.Ok(store.QueryHistory(sensor.Id, start, end));
 });
 
 // The sensor's log in timestamp order, straight out of its SortedDictionary. `sequence`
@@ -487,6 +506,56 @@ api.MapPost("/sensors/{id}/drift", (string id, TelemetryStore store, MeshSimulat
 // ---------------------------------------------------------------- topology (recursion)
 
 api.MapGet("/topology", (TelemetryStore store) => store.Topology);
+
+// The physical radio mesh as a graph: every vertex (ESP32 nodes + the gateway) and every
+// link once, with its RSSI and routing cost. This is the graph BFS and the MST run over.
+api.MapGet("/mesh", (MeshNetwork mesh) => mesh.View());
+
+// BFS over the mesh from the gateway (or any node, via `from`): which nodes it can reach and
+// in how many hops, which are down, and which are stranded - alive, but cut off because
+// every path they had ran through a down node.
+// "Down" is the live disconnect HashSet from Part 2 (silent for 3x the publish interval).
+// `without` adds nodes to treat as down for this one query, a what-if that needs no real
+// outage: ?without=A4:CF:12:9B:05:12,DC:A6:32:77:11:02
+// `subnet` narrows the report to one deployment area: ?subnet=Facility A/Zone 1
+api.MapGet("/mesh/reachability", (
+    MeshNetwork mesh,
+    AnomalyEngine anomalies,
+    [FromQuery] string? from,
+    [FromQuery] string? subnet,
+    [FromQuery] string? without) =>
+{
+    var report = mesh.Reachability(from ?? MeshGraph.GatewayId, DownSet(anomalies, without), string.IsNullOrWhiteSpace(subnet) ? null : subnet.Trim());
+    return report is null ? Results.NotFound(new { error = $"'{from}' is not a node on the mesh." }) : Results.Ok(report);
+});
+
+// Route tracking by MAC. Packets follow the minimum spanning tree: `usual` is the node's
+// path along the healthy MST, `efficient` its path along the live MST, and `nextHop` the
+// first hop of that. `current` is the fewest-hop (BFS) route for comparison, and
+// `cheapestCost` the lowest energy any single route could reach (Dijkstra).
+// When a node on the usual route is down the status is Rerouted; when no route is left it
+// is Stranded and `restoredBy` lists the down nodes whose repair would reconnect it.
+// `without` works as on /mesh/reachability: ?without=A4:CF:12:9B:05:12
+api.MapGet("/mesh/route/{id}", (string id, MeshNetwork mesh, AnomalyEngine anomalies, [FromQuery] string? without) =>
+{
+    var report = mesh.Route(id, DownSet(anomalies, without));
+    return report is null ? Results.NotFound(new { error = $"'{id}' is not a node on the mesh." }) : Results.Ok(report);
+});
+
+// Prim's minimum spanning tree of the live mesh, grown from the gateway: the links that keep
+// every reachable node connected for the least total transmit energy. The report prices it
+// against the fewest-hop BFS tree and against leaving every link active.
+// Down nodes are left out, so the tree re-forms around an outage: ?without=DC:A6:32:77:11:02
+api.MapGet("/mesh/mst", (MeshNetwork mesh, AnomalyEngine anomalies, [FromQuery] string? without) =>
+    mesh.Mst(DownSet(anomalies, without)));
+
+// The nodes the mesh endpoints treat as down: the live disconnect HashSet from Part 2,
+// plus any comma-separated MACs passed in `without` for a what-if.
+static HashSet<string> DownSet(AnomalyEngine anomalies, string? without)
+    => anomalies.Disconnected
+        .Concat((without ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        .Select(TelemetryStore.KeyFor)
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
 api.MapPost("/topology/validate", (DeploymentNode root) => TopologyValidator.Validate(root));
 

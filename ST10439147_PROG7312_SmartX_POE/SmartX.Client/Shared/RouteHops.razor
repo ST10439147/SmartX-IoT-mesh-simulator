@@ -1,0 +1,18 @@
+@*
+    A route as a row of hops, node first and gateway last, with any hop that is down struck
+    through. Hovering a hop shows its full MAC.
+*@
+
+<ol class="route-hops" aria-label="@Route.HopCount-hop route">
+    @foreach (var hop in Route.Hops)
+    {
+        <li class="@(Failed.Contains(hop.Id) ? "failed" : null)" title="@hop.Id">@hop.Name</li>
+    }
+</ol>
+
+@code {
+    [Parameter, EditorRequired] public MeshRoute Route { get; set; } = default!;
+
+    /// <summary>Hops to strike through: the down nodes that broke this route.</summary>
+    [Parameter] public IReadOnlySet<string> Failed { get; set; } = new HashSet<string>();
+}

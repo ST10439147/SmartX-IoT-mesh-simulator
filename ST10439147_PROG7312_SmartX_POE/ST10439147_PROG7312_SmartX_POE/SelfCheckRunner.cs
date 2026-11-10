@@ -5,6 +5,7 @@ using SmartX.Api.Security;
 using SmartX.Api.Services;
 using SmartX.Shared.Diagnostics;
 using SmartX.Shared.Telemetry;
+using SmartX.Shared.Topology;
 
 namespace SmartX.Api;
 
@@ -16,7 +17,7 @@ namespace SmartX.Api;
 /// </summary>
 internal static class SelfCheckRunner
 {
-    public static int Run()
+    public static async Task<int> RunAsync()
     {
         Console.WriteLine("SmartX self-check");
         Console.WriteLine(new string('-', 64));
@@ -41,16 +42,22 @@ internal static class SelfCheckRunner
             foreach (var line in RunTimelineChecks())
                 Console.WriteLine($"  ok  {line}");
 
+            foreach (var line in RunMeshChecks())
+                Console.WriteLine($"  ok  {line}");
+
             foreach (var line in RunDisconnectChecks())
                 Console.WriteLine($"  ok  {line}");
 
-            foreach (var line in RunPredictionLogChecks())
+            foreach (var line in await RunPredictionLogChecksAsync())
                 Console.WriteLine($"  ok  {line}");
 
-            foreach (var line in RunPersistenceChecks())
+            foreach (var line in await RunPersistenceChecksAsync())
                 Console.WriteLine($"  ok  {line}");
 
-            foreach (var line in RunTrendChecks())
+            foreach (var line in await RunConcurrencyChecksAsync())
+                Console.WriteLine($"  ok  {line}");
+
+            foreach (var line in await RunTrendChecksAsync())
                 Console.WriteLine($"  ok  {line}");
         }
         catch (Exception ex)
@@ -325,6 +332,152 @@ internal static class SelfCheckRunner
         return log;
     }
     //----------------------------------------------------------------------------------------------------------------------//
+    private static IEnumerable<string> RunMeshChecks()
+    {
+        var log = new List<string>();
+        var store = new TelemetryStore();
+        var mesh = new MeshNetwork(store);
+
+        SensorRegistration Register(string mac, string path) => store.Register(new SensorRegistration
+        {
+            MacAddress = mac, DisplayName = mac, DeploymentPath = path, Category = SensorCategory.SoilMoisture
+        });
+
+        // Reported links are taken as given, by MAC in any spelling.
+        var north = Register("A4:CF:12:9B:04:7E", "Facility A/Zone 1/Sub-Zone A");
+        mesh.Link(MeshGraph.GatewayId, "a4-cf-12-9b-04-7e", -55);
+
+        var view = mesh.View();
+        Assert(view.Vertices[0].IsGateway, "the gateway should be listed first");
+        Assert(view.Links.Single().RssiDbm == -55, "a reported link should keep its RSSI");
+
+        // A node registered with no reported links is linked to what is near it.
+        var south = Register("A4:CF:12:9B:04:7F", "Facility A/Zone 1/Sub-Zone A");   // same sub-zone as north
+        var vent = Register("DC:A6:32:77:11:02", "Facility A/Zone 1/Sub-Zone B");    // same zone, other sub-zone
+        var tank = Register("B8:27:EB:41:02:AD", "Facility B/Roof");                 // nothing nearby
+
+        view = mesh.View();
+        bool Linked(string a, string b, int rssi) =>
+            view.Links.Any(l => l.RssiDbm == rssi && ((l.From == a && l.To == b) || (l.From == b && l.To == a)));
+
+        Assert(Linked(south.Id, north.Id, -60), "a node should link to a neighbour in its own sub-zone");
+        Assert(Linked(vent.Id, north.Id, -70) && Linked(vent.Id, south.Id, -70), "with no sub-zone neighbour it should link to two in its zone");
+        Assert(Linked(tank.Id, MeshGraph.GatewayId, -75), "with nothing nearby it should fall back to the gateway");
+        Assert(view.Vertices.All(v => v.Degree > 0), "no registered node should be an island");
+
+        // Deleting a node takes its links with it.
+        store.Remove(south.Id);
+        view = mesh.View();
+        Assert(view.Vertices.All(v => v.Id != south.Id), "a deleted node should leave the graph");
+        Assert(view.Links.All(l => l.From != south.Id && l.To != south.Id), "a deleted node's links should go with it");
+
+        log.Add("mesh network: reported links kept, unreported nodes auto-linked by location, deletes leave no dangling links");
+
+        // Reachability. What is left: GW - north - vent, and GW - tank. Take north down and
+        // the vent, whose only link home ran through north, is stranded.
+        var down = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { north.Id };
+        var report = mesh.Reachability(MeshGraph.GatewayId, down)!;
+
+        Assert(report.Reachable.Select(r => r.Id).SequenceEqual([MeshGraph.GatewayId, tank.Id]), "only the gateway and the tank should still be reachable");
+        Assert(report.Down.Single().Id == north.Id, "the down node should be listed as down");
+        Assert(report.Stranded.Single().Id == vent.Id, "the vent only reached home through north, so it should be stranded");
+
+        // The subnet filter narrows the lists, not the search.
+        var zone1 = mesh.Reachability(MeshGraph.GatewayId, new HashSet<string>(), subnet: "facility a/zone 1")!;
+        Assert(zone1.Reachable.Select(r => r.Id).Order().SequenceEqual(new[] { north.Id, vent.Id }.Order()),
+            "a Zone 1 subnet report should list only Zone 1 nodes");
+        Assert(zone1.Reachable.Single(r => r.Id == vent.Id).Hops == 2, "hops should still be counted from the gateway, across the whole mesh");
+
+        Assert(mesh.Reachability("not-a-node", down) is null, "an unknown starting node should give no report");
+
+        log.Add("mesh reachability: down and stranded nodes separated, subnet narrows the report not the search");
+
+        // Routes, on a fresh mesh:   GW - A - B - D      B has two ways home (A or C),
+        //                             \      /           D only has B.
+        //                               C --
+        store = new TelemetryStore();
+        mesh = new MeshNetwork(store);
+        var a = Register("02:00:00:00:00:0A", "Facility A/Zone 1/Sub-Zone A").Id;
+        var b = Register("02:00:00:00:00:0B", "Facility A/Zone 1/Sub-Zone A").Id;
+        var c = Register("02:00:00:00:00:0C", "Facility A/Zone 1/Sub-Zone A").Id;
+        var d = Register("02:00:00:00:00:0D", "Facility A/Zone 1/Sub-Zone A").Id;
+        mesh.Link(MeshGraph.GatewayId, a, -50);
+        mesh.Link(MeshGraph.GatewayId, c, -60);
+        mesh.Link(a, b, -50);
+        mesh.Link(c, b, -60);
+        mesh.Link(b, d, -55);
+
+        HashSet<string> Down(params string[] ids) => [.. ids];   // default comparer on purpose: Route must cope
+        IEnumerable<string> Ids(MeshRoute? r) => r!.Hops.Select(h => h.Id);
+
+        var healthy = mesh.Route(d.ToLowerInvariant(), Down())!;   // any MAC spelling
+        Assert(healthy.Status == RouteStatus.Online && healthy.NextHop == b, "a healthy node should be online and hand packets to B");
+        Assert(Ids(healthy.Current).SequenceEqual([d, b, a, MeshGraph.GatewayId]), "D's route should be D-B-A-gateway");
+        Assert(healthy.Current!.HopCount == 3 && healthy.Current.TotalCost == Math.Round(MeshGraph.CostOf(-55) + 1 + 1, 2), "hop count and energy should add up along the route");
+
+        var healed = mesh.Route(d, Down(a.ToLowerInvariant()))!;
+        Assert(healed.Status == RouteStatus.Rerouted, "with A down, D should be rerouted, not lost");
+        Assert(Ids(healed.Current).SequenceEqual([d, b, c, MeshGraph.GatewayId]), "the detour should run through C");
+        Assert(healed.FailedOnUsual.Single().Id == a && Ids(healed.Usual).Contains(a), "the report should name the node that broke the usual route");
+        Assert(mesh.Route(b, Down(a))!.NextHop == c, "with A down, B's next hop should switch to C");
+
+        var cutOff = mesh.Route(d, Down(b))!;
+        Assert(cutOff.Status == RouteStatus.Stranded && cutOff.Current is null && cutOff.NextHop is null, "with B down, D has no way home");
+        Assert(cutOff.RestoredBy.Single().Id == b, "repairing B should be the one fix for D");
+
+        var bothGone = mesh.Route(b, Down(a, c))!;
+        Assert(bothGone.Status == RouteStatus.Stranded && bothGone.RestoredBy.Select(v => v.Id).Order().SequenceEqual(new[] { a, c }.Order()),
+            "with A and C both down, bringing back either one should reconnect B");
+
+        Assert(mesh.Route(d, Down(d))!.Status == RouteStatus.Down, "a silent node should be reported down");
+        Assert(mesh.Route(MeshGraph.GatewayId, Down()) is null && mesh.Route("nope", Down()) is null, "the gateway and unknown ids have no route");
+
+        // The efficient (MST) route and the Dijkstra yardstick ride along on every live route.
+        Assert(Ids(healthy.Efficient).SequenceEqual([d, b, a, MeshGraph.GatewayId]) && healthy.CheapestCost == healthy.Current.TotalCost,
+            "on this mesh D's MST route is also its cheapest");
+        Assert(healthy.NextHop == healthy.Efficient!.Hops[1].Id, "the next hop should come from the efficient route");
+        Assert(Ids(healed.Efficient).SequenceEqual([d, b, c, MeshGraph.GatewayId]), "with A down the MST re-forms and D's efficient route heals through C");
+        Assert(cutOff.Efficient is null && cutOff.CheapestCost is null, "a stranded node has no efficient route either");
+
+        log.Add("mesh routes: traced by MAC, heal around a down node with a new next hop, stranded nodes name their repair, efficient route follows the mst");
+
+        // MST report on the same mesh: GW-A (1), A-B (1) and B-D (3.16) are the cheap links;
+        // C has two links, GW-C and C-B, both -60 dBm (cost 10), and joins through one of them.
+        // The other is the one link the MST leaves out.
+        var tree = mesh.Mst(Down());
+        Assert(tree.Vertices.Count == 5 && tree.Edges.Count == 4 && tree.Down.Count == 0 && tree.Unreached.Count == 0, "all five vertices should be spanned by four links");
+        Assert(tree.TotalCost == Math.Round(1 + 10 + 1 + MeshGraph.CostOf(-55), 2), $"MST should be GW-A + GW-C + A-B + B-D, got {tree.TotalCost}");
+        Assert(tree.MeshLinks == 5 && tree.MeshCost == Math.Round(tree.TotalCost + 10, 2), "the full mesh adds the C-B link on top");
+        Assert(tree.BfsTreeCost >= tree.TotalCost, "no routing tree can cost less than the MST");
+
+        var withoutB = mesh.Mst(Down(b.ToLowerInvariant()));
+        Assert(withoutB.Down.Single().Id == b && withoutB.Unreached.Single().Id == d, "with B down, D cannot be spanned");
+        Assert(withoutB.Edges.Count == 2 && withoutB.MeshLinks == 2, "only GW-A and GW-C are left live");
+
+        log.Add("mesh mst report: spans the live mesh, priced against the bfs tree and the full mesh, re-forms around down nodes");
+
+        // A node whose fewest-hop and power-efficient routes differ: E hears the gateway
+        // directly but weakly (cost 100), and D strongly (cost 1). BFS sends it direct;
+        // the MST sends it E-D-B-A-gateway for 1 + 3.16 + 1 + 1.
+        var e = Register("02:00:00:00:00:0E", "Facility A/Zone 1/Sub-Zone A").Id;
+        mesh.Link(MeshGraph.GatewayId, e, -70);
+        mesh.Link(d, e, -50);
+
+        var split = mesh.Route(e, Down())!;
+        Assert(Ids(split.Current).SequenceEqual([e, MeshGraph.GatewayId]), "BFS should take E's one weak hop");
+        Assert(Ids(split.Efficient).SequenceEqual([e, d, b, a, MeshGraph.GatewayId]) && split.NextHop == d, "the MST should send E through D instead");
+        Assert(split.Efficient!.TotalCost < split.Current!.TotalCost && split.CheapestCost == split.Efficient.TotalCost, "the MST route should be the cheaper one, and here the cheapest possible");
+
+        // B is on E's MST route but not on its BFS route. Losing it must still count as a reroute.
+        var lostB = mesh.Route(e, Down(b))!;
+        Assert(lostB.Status == RouteStatus.Rerouted && lostB.FailedOnUsual.Single().Id == b,
+            "a down node on the route packets actually use should make the node Rerouted");
+        Assert(Ids(lostB.Efficient).SequenceEqual([e, MeshGraph.GatewayId]), "with B down, E's only way home is its weak direct link");
+
+        log.Add("mesh routes: when the fewest-hop and mst routes differ, packets follow the mst and its failures count as reroutes");
+        return log;
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
     private static IEnumerable<string> RunDisconnectChecks()
     {
         var log = new List<string>();
@@ -394,7 +547,7 @@ internal static class SelfCheckRunner
         return log;
     }
     //----------------------------------------------------------------------------------------------------------------------//
-    private static IEnumerable<string> RunPredictionLogChecks()
+    private static async Task<IEnumerable<string>> RunPredictionLogChecksAsync()
     {
         var log = new List<string>();
         var store = new TelemetryStore();
@@ -411,27 +564,28 @@ internal static class SelfCheckRunner
         });
 
         // Nothing wrong: the action is logged with no context.
-        Assert(predictions.Record(OperatorActionKind.Search, "valve").Contexts.Count == 0, "with no fault open an action has no context");
+        Assert((await predictions.RecordAsync(OperatorActionKind.Search, "valve")).Contexts.Count == 0, "with no fault open an action has no context");
 
         // The probe goes silent, then the operator searches. The search is tied to that open fault.
         var lastHeard = DateTimeOffset.UtcNow;
         store.Ingest(new TelemetryPacket<float>(probe.Id, 31f, probe.Category, lastHeard));
         var outage = engine.SweepForSilence(lastHeard.AddSeconds(8))[0];
 
-        var search = predictions.Record(OperatorActionKind.Search, "  Pump ");
+        var search = await predictions.RecordAsync(OperatorActionKind.Search, "  Pump ");
         Assert(search.Contexts.SequenceEqual(["SoilMoisture|Silence"]),
             $"a search during a moisture outage should carry that fault, got '{string.Join(", ", search.Contexts)}'");
         Assert(search.FollowUp == "Search:pump", "search terms are normalised so 'Pump ' and 'pump' are one follow-up");
 
         // Repeating an action during the same fault is one habit, not several.
-        predictions.Record(OperatorActionKind.Search, "pump");
-        predictions.Record(OperatorActionKind.Search, "PUMP");
-        Assert(predictions.Rank("SoilMoisture|Silence").Single().Count == 1, "repeats during one fault should count once");
-        Assert(predictions.Suggest(outage) is null, "one search is not a habit yet, so nothing is suggested");
+        await predictions.RecordAsync(OperatorActionKind.Search, "pump");
+        await predictions.RecordAsync(OperatorActionKind.Search, "PUMP");
+        Assert((await predictions.RankAsync("SoilMoisture|Silence")).Single().Count == 1, "repeats during one fault should count once");
+        Assert(await predictions.SuggestAsync(outage) is null, "one search is not a habit yet, so nothing is suggested");
 
-        var command = predictions.Record(OperatorActionKind.Command, "Switch Borehole Pump on");
+        var command = await predictions.RecordAsync(OperatorActionKind.Command, "Switch Borehole Pump on");
         Assert(command.FollowUp == "Command:Switch Borehole Pump on", "command labels are kept as issued");
-        Assert(predictions.Log[0] == command && predictions.Log.Count == 5, "the log is newest first and holds every action");
+        var entries = await predictions.LogAsync();
+        Assert(entries[0] == command && entries.Count == 5, "the log is newest first and holds every action");
 
         // The fault closes and a new one opens: the same search now counts again. Pump outranks the command.
         var back = DateTimeOffset.UtcNow;
@@ -439,33 +593,33 @@ internal static class SelfCheckRunner
         engine.SweepForSilence(back.AddSeconds(1));
         store.Ingest(new TelemetryPacket<float>(probe.Id, 31f, probe.Category, back.AddSeconds(30)));
         var secondOutage = engine.SweepForSilence(back.AddSeconds(38))[0];
-        predictions.Suggest(secondOutage);   // raising the alert is what starts a new count
-        predictions.Record(OperatorActionKind.Search, "pump");
-        predictions.Record(OperatorActionKind.Search, "PUMP");
-        var ranked = predictions.Rank("SoilMoisture|Silence");
+        await predictions.SuggestAsync(secondOutage);   // raising the alert is what starts a new count
+        await predictions.RecordAsync(OperatorActionKind.Search, "pump");
+        await predictions.RecordAsync(OperatorActionKind.Search, "PUMP");
+        var ranked = await predictions.RankAsync("SoilMoisture|Silence");
         Assert(ranked.Count == 2 && ranked[0] == new RankedFollowUp("Search:pump", 2) && ranked[1].Count == 1,
             $"pump searched in two separate faults should rank first, got {string.Join(", ", ranked)}");
-        Assert(predictions.Rank("SoilMoisture|Silence", top: 1).Count == 1, "top limits the ranking");
-        Assert(predictions.Rank("TankLevel|Spike").Count == 0, "an event never seen has no follow-ups");
-        Assert(predictions.Pairs.Keys.SequenceEqual(["SoilMoisture|Silence"]), "an action with no alert open forms no pair");
+        Assert((await predictions.RankAsync("SoilMoisture|Silence", top: 1)).Count == 1, "top limits the ranking");
+        Assert((await predictions.RankAsync("TankLevel|Spike")).Count == 0, "an event never seen has no follow-ups");
+        Assert((await predictions.PairsAsync()).Keys.SequenceEqual(["SoilMoisture|Silence"]), "an action with no alert open forms no pair");
 
         // The moisture alert comes round again: the pump is suggested on its own. The command,
         // done only once, is below MinOccurrences and is left out.
-        var suggestion = predictions.Suggest(outage);
+        var suggestion = await predictions.SuggestAsync(outage);
         Assert(suggestion is { FollowUps.Count: 1 } && suggestion.FollowUps[0].FollowUp == "Search:pump",
             "a repeated moisture-then-pump pattern should suggest the pump when the alert recurs");
-        Assert(predictions.Current == suggestion, "the latest suggestion is kept for a dashboard that opens mid-alert");
-        Assert(predictions.Suggest(outage with { Kind = AlertKind.Spike }) is null, "a different event has nothing learned to suggest");
-        Assert(predictions.Suggest(outage with { Suppressed = true }) is null, "a suppressed alert gets no suggestion");
+        Assert(await predictions.CurrentAsync() == suggestion, "the latest suggestion is kept for a dashboard that opens mid-alert");
+        Assert(await predictions.SuggestAsync(outage with { Kind = AlertKind.Spike }) is null, "a different event has nothing learned to suggest");
+        Assert(await predictions.SuggestAsync(outage with { Suppressed = true }) is null, "a suppressed alert gets no suggestion");
 
         // The node reports again, so the fault is closed: what the operator does now is not a reaction to it.
         back = DateTimeOffset.UtcNow.AddMinutes(1);
         store.Ingest(new TelemetryPacket<float>(probe.Id, 31f, probe.Category, back));
         engine.SweepForSilence(back.AddSeconds(1));
-        Assert(predictions.Record(OperatorActionKind.Search, "pump").Contexts.Count == 0, "once the fault closes, actions are no longer tied to it");
+        Assert((await predictions.RecordAsync(OperatorActionKind.Search, "pump")).Contexts.Count == 0, "once the fault closes, actions are no longer tied to it");
 
-        for (var i = 0; i < PredictionService.MaxLog; i++) predictions.Record(OperatorActionKind.Search, $"s{i}");
-        Assert(predictions.Log.Count == PredictionService.MaxLog, "the log drops its oldest entries past the cap");
+        for (var i = 0; i < PredictionService.MaxLog; i++) await predictions.RecordAsync(OperatorActionKind.Search, $"s{i}");
+        Assert((await predictions.LogAsync()).Count == PredictionService.MaxLog, "the log drops its oldest entries past the cap");
 
         log.Add("prediction log: every search and command is logged with the alert that was open at the time");
         log.Add("dictionary of counters: after-X-did-Y pairs are counted and the most frequent follow-up ranks first");
@@ -473,7 +627,7 @@ internal static class SelfCheckRunner
         return log;
     }
     //----------------------------------------------------------------------------------------------------------------------//
-    private static IEnumerable<string> RunPersistenceChecks()
+    private static async Task<IEnumerable<string>> RunPersistenceChecksAsync()
     {
         var log = new List<string>();
         var path = Path.Combine(Path.GetTempPath(), $"smartx-predictions-{Guid.NewGuid():N}.json");
@@ -484,7 +638,7 @@ internal static class SelfCheckRunner
             var engine = new AnomalyEngine(store, new CommandService(), NullLogger<AnomalyEngine>.Instance);
 
             var first = new PredictionService(store, engine, path);
-            var seeded = first.Insights();
+            var seeded = await first.InsightsAsync();
             Assert(seeded.Count >= 3 && seeded.All(i => !i.Open), "a first run starts from seeded habits, none of them open");
             Assert(seeded.SelectMany(i => i.FollowUps).All(f => f.Count >= PredictionService.MinOccurrences), "insights list only follow-ups that are a habit");
 
@@ -497,17 +651,17 @@ internal static class SelfCheckRunner
             var heard = DateTimeOffset.UtcNow;
             store.Ingest(new TelemetryPacket<float>(probe.Id, 31f, probe.Category, heard));
             engine.SweepForSilence(heard.AddSeconds(8));
-            first.Record(OperatorActionKind.Search, "valve");
-            Assert(first.Insights().Any(i => i.Open && i.Devices.Contains("Persist probe")), "a learned event with a fault open now is flagged open, naming the device");
+            await first.RecordAsync(OperatorActionKind.Search, "valve");
+            Assert((await first.InsightsAsync()).Any(i => i.Open && i.Devices.Contains("Persist probe")), "a learned event with a fault open now is flagged open, naming the device");
 
             var second = new PredictionService(store, engine, path);
-            Assert(second.Rank("SoilMoisture|Silence").Any(f => f.FollowUp == "Search:valve" && f.Count == 3), "a restart reloads what was learned (seed 2 + 1 new)");
-            Assert(second.Insights().Count == first.Insights().Count, "a restart does not re-seed over saved counters");
+            Assert((await second.RankAsync("SoilMoisture|Silence")).Any(f => f.FollowUp == "Search:valve" && f.Count == 3), "a restart reloads what was learned (seed 2 + 1 new)");
+            Assert((await second.InsightsAsync()).Count == (await first.InsightsAsync()).Count, "a restart does not re-seed over saved counters");
 
             // Reset starts the engine cold, and stays cold across a restart.
-            second.Reset();
-            Assert(second.Pairs.Count == 0 && second.Log.Count == 0 && second.Insights().Count == 0 && second.Current is null, "reset forgets everything learned");
-            Assert(new PredictionService(store, engine, path).Pairs.Count == 0, "a reset engine is not re-seeded on restart");
+            await second.ResetAsync();
+            Assert((await second.PairsAsync()).Count == 0 && (await second.LogAsync()).Count == 0 && (await second.InsightsAsync()).Count == 0 && await second.CurrentAsync() is null, "reset forgets everything learned");
+            Assert((await new PredictionService(store, engine, path).PairsAsync()).Count == 0, "a reset engine is not re-seeded on restart");
         }
         finally
         {
@@ -518,7 +672,47 @@ internal static class SelfCheckRunner
         return log;
     }
     //----------------------------------------------------------------------------------------------------------------------//
-    private static IEnumerable<string> RunTrendChecks()
+    private static async Task<IEnumerable<string>> RunConcurrencyChecksAsync()
+    {
+        var log = new List<string>();
+        var path = Path.Combine(Path.GetTempPath(), $"smartx-predictions-{Guid.NewGuid():N}.json");
+
+        try
+        {
+            var store = new TelemetryStore();
+            var engine = new AnomalyEngine(store, new CommandService(), NullLogger<AnomalyEngine>.Instance);
+            var predictions = new PredictionService(store, engine, path);
+
+            var probe = store.Register(new SensorRegistration
+            {
+                MacAddress = "A4:CF:12:9B:09:01", DisplayName = "Concurrent probe", DeploymentPath = "Facility A/Zone 1/Sub-Zone A",
+                Category = SensorCategory.SoilMoisture, PublishIntervalSeconds = 2
+            });
+            var heard = DateTimeOffset.UtcNow;
+            store.Ingest(new TelemetryPacket<float>(probe.Id, 31f, probe.Category, heard));
+            engine.SweepForSilence(heard.AddSeconds(8));
+
+            // Every call arrives at once, on a cold engine: one load, no lost counts, the last save holds them all.
+            const int actions = 100;
+            await Task.WhenAll(Enumerable.Range(0, actions).Select(i =>
+                Task.Run(() => predictions.RecordAsync(OperatorActionKind.Search, $"term{i}"))));
+
+            Assert((await predictions.LogAsync()).Count == actions, "every concurrent action should be logged");
+
+            var row = await new PredictionService(store, engine, path).RankAsync("SoilMoisture|Silence", int.MaxValue);
+            Assert(row.Count == actions + 1 && row[0] == new RankedFollowUp("Search:valve", 2),
+                $"the saved file should hold the seeded habit and all {actions} new ones, holds {row.Count}");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+
+        log.Add("async gate: concurrent actions on a cold engine load once, lose no counts and all reach the saved file");
+        return log;
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    private static async Task<IEnumerable<string>> RunTrendChecksAsync()
     {
         var log = new List<string>();
         var store = new TelemetryStore();
@@ -547,7 +741,7 @@ internal static class SelfCheckRunner
         Probe(3, i => 30f + 0.01f * i);                 // climbing, but would take half an hour
         Probe(4, i => 40f + 0.3f * i);                  // already over 45: a breach, not a trend
 
-        var flags = predictions.TrendFlags();
+        var flags = await predictions.TrendFlagsAsync();
         Assert(flags.Count == 1 && flags[0].SensorId == climbing,
             $"only the steady climb close to its threshold should be flagged, got {string.Join(", ", flags.Select(f => f.SensorName))}");
         Assert(Math.Abs(flags[0].SecondsToThreshold - 42) < 1 && Math.Abs(flags[0].SlopePerSecond - 0.15) < 1e-3,

@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.SignalR;
 using SmartX.Api.Hubs;
 using SmartX.Shared;
 using SmartX.Shared.Telemetry;
+using SmartX.Shared.Topology;
 
 namespace SmartX.Api.Services;
 
@@ -18,6 +19,7 @@ namespace SmartX.Api.Services;
 /// </summary>
 public sealed class MeshSimulator(
     TelemetryStore store,
+    MeshNetwork mesh,
     AnomalyEngine anomalies,
     CommandService commands,
     PredictionService predictions,
@@ -71,6 +73,7 @@ public sealed class MeshSimulator(
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         SeedMesh();
+        BackfillHistory(TimeSpan.FromHours(24));
 
         // Hosted services start before Kestrel is listening, so there is nothing to post
         // to yet. Wait for the server, then aim at whichever port it actually bound.
@@ -119,7 +122,7 @@ public sealed class MeshSimulator(
                     {
                         await hub.Clients.All.SendAsync(HubEvents.AlertRaised, alert, stoppingToken);
 
-                        if (predictions.Suggest(alert) is { } suggestion)
+                        if (await predictions.SuggestAsync(alert, stoppingToken) is { } suggestion)
                             await hub.Clients.All.SendAsync(HubEvents.SuggestionReady, suggestion, stoppingToken);
                     }
                 }
@@ -262,8 +265,98 @@ public sealed class MeshSimulator(
         Add("B8:27:EB:41:02:AB", "Booster Pump", "Facility A/Zone 2/Sub-Zone C", SensorCategory.PumpPower, 2, 940, 90);
         Add("A4:CF:12:9B:06:01", "Main Line Flow", "Facility A/Zone 2/Sub-Zone C", SensorCategory.WaterFlow, 2, 18, 1.5);
         Add("B8:27:EB:41:02:AD", "Rainwater Tank Level", "Facility A/Zone 2/Roof Array", SensorCategory.TankLevel, 5, 74, 2);
+
+        LinkMesh();
+    }
+    //----------------------------------------------------------------------------------------------------------------------//
+    /// <summary>
+    /// The radio links of the seeded farm, as each node would report them: who it can hear
+    /// and at what RSSI (dBm, closer to zero is stronger). The gateway sits in the pump house.
+    ///
+    /// <para>The layout is a real mesh, not a star: only the pump house is in direct range of
+    /// the gateway. The greenhouse reaches it through the main line flow meter or the roof
+    /// array, and the field beds only through the greenhouse - so every far node has at
+    /// least two ways home, which is what lets the mesh heal when one node drops.</para>
+    /// </summary>
+    private void LinkMesh()
+    {
+        const string gateway = MeshGraph.GatewayId;
+
+        // Pump house: in direct range of the gateway.
+        mesh.Link(gateway, "B8:27:EB:41:02:AA", -45);              // Borehole Pump
+        mesh.Link(gateway, "B8:27:EB:41:02:AB", -48);              // Booster Pump
+        mesh.Link(gateway, "A4:CF:12:9B:06:01", -52);              // Main Line Flow
+        mesh.Link("B8:27:EB:41:02:AA", "B8:27:EB:41:02:AB", -42);
+        mesh.Link("B8:27:EB:41:02:AB", "A4:CF:12:9B:06:01", -50);
+
+        // Roof array: a weak direct hop, or a better one via the flow meter.
+        mesh.Link(gateway, "B8:27:EB:41:02:AD", -63);              // Rainwater Tank Level
+        mesh.Link("A4:CF:12:9B:06:01", "B8:27:EB:41:02:AD", -58);
+
+        // Greenhouse <-> pump house / roof: the long hops that carry Zone 1 home.
+        mesh.Link("A4:CF:12:9B:06:01", "A4:CF:12:9B:05:13", -67);  // flow meter - Grow Light
+        mesh.Link("B8:27:EB:41:02:AD", "A4:CF:12:9B:05:13", -71);  // tank - Grow Light
+        mesh.Link("B8:27:EB:41:02:AD", "DC:A6:32:77:11:02", -69);  // tank - Roof Vent
+
+        // Inside the greenhouse.
+        mesh.Link("A4:CF:12:9B:05:13", "A4:CF:12:9B:05:10", -50);  // Grow Light - Humidity
+        mesh.Link("A4:CF:12:9B:05:13", "A4:CF:12:9B:05:11", -58);  // Grow Light - Air Temp
+        mesh.Link("A4:CF:12:9B:05:10", "A4:CF:12:9B:05:11", -44);  // Humidity - Air Temp
+        mesh.Link("A4:CF:12:9B:05:11", "A4:CF:12:9B:05:12", -47);  // Air Temp - pH
+        mesh.Link("A4:CF:12:9B:05:12", "DC:A6:32:77:11:02", -53);  // pH - Roof Vent
+        mesh.Link("A4:CF:12:9B:05:10", "DC:A6:32:77:11:02", -55);  // Humidity - Roof Vent
+
+        // Greenhouse <-> field beds: two separate bridges.
+        mesh.Link("A4:CF:12:9B:05:12", "A4:CF:12:9B:04:7E", -66);  // pH - Soil Moisture North
+        mesh.Link("DC:A6:32:77:11:02", "DC:A6:32:77:11:01", -70);  // Roof Vent - Drip Valve A
+
+        // Field beds.
+        mesh.Link("A4:CF:12:9B:04:7E", "A4:CF:12:9B:04:7F", -55);  // Moisture North - South
+        mesh.Link("A4:CF:12:9B:04:7E", "DC:A6:32:77:11:01", -49);  // Moisture North - Valve A
+        mesh.Link("A4:CF:12:9B:04:7F", "DC:A6:32:77:11:03", -51);  // Moisture South - Valve B
+        mesh.Link("A4:CF:12:9B:04:7F", "DC:A6:32:77:11:01", -60);  // Moisture South - Valve A
+        mesh.Link("DC:A6:32:77:11:01", "DC:A6:32:77:11:03", -54);  // Valve A - Valve B
     }
 
+    //----------------------------------------------------------------------------------------------------------------------//
+    /// <summary>
+    /// Seeds <paramref name="span"/> of history into every seeded node's AVL tree, ending
+    /// where the warmup begins, so a range query like "14:00 to 16:00" has data from the
+    /// first request (~416k readings across the seeded mesh, roughly 50 MB in memory).
+    /// </summary>
+    // Written straight into the store rather than posted: ~400k HTTP calls
+    // would hold boot up for minutes, and the live path already proves the API route.
+    // Sequence 0 marks a seeded reading; live readings always carry a sequence of 1 or more.
+    private void BackfillHistory(TimeSpan span)
+    {
+        var end = DateTimeOffset.UtcNow.AddSeconds(-WarmupTicks);
+        var seeded = 0;
+
+        foreach (var sensor in store.Sensors)
+        {
+            var node = _state[sensor.Id];
+            var step = TimeSpan.FromSeconds(sensor.PublishIntervalSeconds);
+
+            for (var at = end - span; at < end; at += step)
+            {
+                var spiking = _random.NextDouble() < 0.012;
+                double value;
+
+                if (sensor.Payload == PayloadKind.Boolean)
+                {
+                    if (_random.NextDouble() < 0.08) node.Flag = !node.Flag;
+                    value = node.Flag ? 1 : 0;
+                }
+                else if (sensor.Payload == PayloadKind.Integer) value = Math.Round(node.NextFloat(_random, spiking));
+                else value = node.NextFloat(_random, spiking);
+
+                store.LogHistory(sensor.Id, new TimelinePoint(at, value, 0));
+                seeded++;
+            }
+        }
+
+        logger.LogInformation("Backfilled {Count:N0} readings ({Hours}h) into the AVL history trees", seeded, span.TotalHours);
+    }
     //----------------------------------------------------------------------------------------------------------------------//
 
     /// <summary>

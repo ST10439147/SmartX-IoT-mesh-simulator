@@ -1,0 +1,467 @@
+@page "/topology"
+@using System.Globalization
+@implements IDisposable
+@inject GatewayClient Gateway
+
+<PageTitle>Mesh routing - Smart-X</PageTitle>
+
+<div class="page-head">
+    <h1>Network topology &amp; mesh routing</h1>
+    <p>
+        The ESP32 mesh as a graph. Packets hop node to node along the minimum spanning tree (Prim's):
+        the links that keep every node connected for the least total transmit energy. When a node goes
+        silent the tree re-forms around it, and anything with no way left home is flagged as stranded.
+    </p>
+</div>
+
+@if (_error is not null)
+{
+    <div class="toast bad"><span>@_error</span></div>
+}
+
+@if (_whatIf.Count > 0)
+{
+    <div class="toast busy">
+        <span>
+            What-if: treating @string.Join(", ", _whatIf.Select(Name)) as down. Everything on this page shows the mesh
+            as if @(_whatIf.Count == 1 ? "it" : "they") failed - nothing on the real mesh is touched.
+        </span>
+    </div>
+}
+
+<div class="stats" style="margin-bottom:1rem">
+    <div class="stat">
+        <div class="label">Nodes</div>
+        <div class="value">@(_mesh is null ? "-" : _mesh.Vertices.Count - 1)</div>
+    </div>
+    <div class="stat">
+        <div class="label">Radio links</div>
+        <div class="value">@(_mesh?.Links.Count.ToString() ?? "-")</div>
+    </div>
+    <div class="stat">
+        <div class="label">Down</div>
+        <div class="value @(_mst?.Down.Count > 0 ? "crit" : "ok")">@(_mst?.Down.Count ?? 0)</div>
+    </div>
+    <div class="stat">
+        <div class="label">Stranded</div>
+        <div class="value @(_mst?.Unreached.Count > 0 ? "warn" : "ok")">@(_mst?.Unreached.Count ?? 0)</div>
+    </div>
+    <div class="stat">
+        <div class="label">MST energy</div>
+        <div class="value">@Cost(_mst?.TotalCost)</div>
+    </div>
+    <div class="stat">
+        <div class="label">Fewest-hop tree</div>
+        <div class="value">@Cost(_mst?.BfsTreeCost)</div>
+    </div>
+    <div class="stat">
+        <div class="label">Energy saved</div>
+        <div class="value ok">@Saving</div>
+    </div>
+</div>
+
+@* ------------------------------------------------------------ mesh map *@
+<section class="panel" style="margin-bottom:1rem">
+    <div class="panel-head">
+        <h2>Mesh map</h2>
+        <span class="count">@(_updated is null ? "connecting..." : $"updated {_updated.Value.ToLocalTime():HH:mm:ss}, every 5 s")</span>
+    </div>
+    <MeshMap Mesh="_mesh" Mst="_mst" Route="_route?.Efficient" Selected="@_tracked" OnNodeClick="TrackAsync" />
+</section>
+
+@* ------------------------------------------------------------ route tracker *@
+<section class="panel" style="margin-bottom:1rem">
+    <div class="panel-head">
+        <h2>Route tracker</h2>
+        <span class="count">click a node on the map, or search by MAC</span>
+    </div>
+
+    <form class="form-grid" @onsubmit="SearchAsync">
+        <div class="field">
+            <label for="rt-mac">Node MAC or name</label>
+            <input id="rt-mac" list="rt-nodes" placeholder="A4:CF:12:9B:04:7F, 04-7f, or Soil Moisture" @bind="_search" />
+            <datalist id="rt-nodes">
+                @foreach (var node in Nodes)
+                {
+                    <option value="@node.Id">@node.Name</option>
+                }
+            </datalist>
+            @if (_searchError is not null)
+            {
+                <span class="field-error">@_searchError</span>
+            }
+        </div>
+        <div class="field">
+            <label for="rt-whatif">What-if: take a node down</label>
+            @* Keyed on the count so Blazor rebuilds it after each pick: otherwise the browser
+               jumps to the next option when the picked one is removed from the list. *@
+            <select id="rt-whatif" @key="_whatIf.Count" value="" @onchange="AddWhatIfAsync">
+                <option value="">Pick a node...</option>
+                @foreach (var node in Nodes.Where(n => !_whatIf.Contains(n.Id)))
+                {
+                    <option value="@node.Id">@node.Name</option>
+                }
+            </select>
+        </div>
+    </form>
+    <div class="actions" style="margin-top:.6rem">
+        <button class="primary" @onclick="SearchAsync">Track route</button>
+        @if (_tracked is not null)
+        {
+            <button class="ghost" @onclick="StopTrackingAsync">Stop tracking</button>
+        }
+    </div>
+
+    @if (_whatIf.Count > 0)
+    {
+        <div class="chips">
+            @foreach (var id in _whatIf)
+            {
+                <button class="tiny" title="Bring it back" @onclick="() => RemoveWhatIfAsync(id)">@Name(id) &times;</button>
+            }
+            <button class="tiny ghost" @onclick="ClearWhatIfAsync">Clear what-if</button>
+        </div>
+    }
+
+    @if (_route is { } r)
+    {
+        <div class="panel-head" style="margin-top:1.1rem">
+            <h3>@r.Node.Name <span class="mono" style="color:var(--dim)">@r.Node.Id</span></h3>
+            <span class="tag @StatusTag(r.Status)">@r.Status.ToString().ToLowerInvariant()</span>
+        </div>
+        <p>@StatusText(r)</p>
+
+        <dl class="kv">
+            @if (r.NextHop is not null)
+            {
+                <dt>Next hop</dt>
+                <dd>@Name(r.NextHop) (@r.NextHop)</dd>
+            }
+
+            <dt>Power-efficient route (MST)</dt>
+            <dd>
+                @if (r.Efficient is { } efficient)
+                {
+                    <RouteHops Route="efficient" Failed="FailedIds(r)" />
+                    <div>@efficient.HopCount hops, energy @Cost(efficient.TotalCost)@CheapestNote(r)</div>
+                }
+                else
+                {
+                    <span>none</span>
+                }
+            </dd>
+
+            <dt>Fewest-hop route (BFS)</dt>
+            <dd>
+                @if (r.Current is { } current)
+                {
+                    <RouteHops Route="current" Failed="FailedIds(r)" />
+                    <div>@current.HopCount hops, energy @Cost(current.TotalCost)</div>
+                }
+                else
+                {
+                    <span>none</span>
+                }
+            </dd>
+
+            @if (r.Usual is { } usual && r.Status != RouteStatus.Online)
+            {
+                <dt>Usual route (healthy mesh)</dt>
+                <dd>
+                    <RouteHops Route="usual" Failed="FailedIds(r)" />
+                    <div>@usual.HopCount hops, energy @Cost(usual.TotalCost)</div>
+                </dd>
+            }
+
+            @if (r.RestoredBy.Count > 0)
+            {
+                <dt>Fix first</dt>
+                <dd>@string.Join(" or ", r.RestoredBy.Select(v => v.Name)) - bringing back either one reconnects this node</dd>
+            }
+        </dl>
+    }
+    else if (_tracked is not null)
+    {
+        <p class="hint">Tracing @Name(_tracked)...</p>
+    }
+</section>
+
+@* ------------------------------------------------------------ historical log *@
+<section class="panel" style="margin-bottom:1rem">
+    <div class="panel-head">
+        <h2>Historical telemetry</h2>
+        <span class="count">AVL range query &middot; follows the tracked node</span>
+    </div>
+    <p>
+        Every reading a sensor took inside a time window, from its self-balancing AVL tree. The tree skips any
+        branch that lies wholly outside the window, so pulling two hours out of a day touches only the readings
+        returned plus the path down to them - not the whole history.
+    </p>
+    <HistoryLog Sensors="_sensors" SensorId="@_tracked" />
+</section>
+
+@* ------------------------------------------------------------ the tree itself *@
+<section class="panel">
+    <div class="panel-head">
+        <h2>Routing tree</h2>
+        <span class="count">@(_mst?.Edges.Count ?? 0) of @(_mst?.MeshLinks ?? 0) live links kept</span>
+    </div>
+    <p>
+        The links Prim's algorithm chose, in the order it took them: each step adds the cheapest link from
+        the tree so far to a node not yet in it. Cost is relative transmit energy - every 10 dB weaker
+        signal costs ten times more.
+    </p>
+
+    @if (_mst is { Edges.Count: > 0 })
+    {
+        <div class="scroll-x">
+            <table class="context-table">
+                <thead>
+                    <tr><th>#</th><th>From</th><th>To</th><th>RSSI</th><th>Cost</th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var (edge, i) in _mst.Edges.Select((e, i) => (e, i + 1)))
+                    {
+                        <tr>
+                            <td>@i</td>
+                            <td>@Name(edge.From)</td>
+                            <td>@Name(edge.To)</td>
+                            <td>@edge.RssiDbm dBm</td>
+                            <td>@edge.Cost.ToString("0.##", CultureInfo.InvariantCulture)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+    else
+    {
+        <p class="hint">Waiting for the gateway.</p>
+    }
+</section>
+
+@code {
+    private static readonly TimeSpan Refresh = TimeSpan.FromSeconds(5);   // matches the gateway's silence sweep
+
+    private readonly CancellationTokenSource _cts = new();
+    private CancellationToken _token;
+    private MeshView? _mesh;
+    private MstReport? _mst;
+    private DateTimeOffset? _updated;
+    private string? _error;
+    private Dictionary<string, string> _names = [];
+
+    // Route tracker
+    private string _search = "";
+    private string? _searchError;
+    private string? _tracked;                      // id of the node being tracked
+    private RouteReport? _route;
+    private readonly List<string> _whatIf = [];    // nodes treated as down for this page only
+    private int _loadVersion;                      // newest load wins; see LoadAsync
+
+    // Historical log: the sensor list (names, units, payload types). Loaded once - it only
+    // changes when a node is registered or deleted, not every poll.
+    private IReadOnlyList<SensorSnapshot>? _sensors;
+
+    private IEnumerable<MeshVertex> Nodes =>(_mesh?.Vertices ?? []).Where(v => !v.IsGateway).OrderBy(v => v.Name);
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Taken once: after Dispose the source is gone, but a captured token still reads as cancelled.
+        _token = _cts.Token;
+        var sensors = Gateway.GetSensorsAsync(_token);
+        await LoadAsync(_token);
+        try
+        {
+            _sensors = await sensors;
+        }
+        catch (HttpRequestException)
+        {
+            // The historical log stays on its "pick a sensor" hint; the map still works.
+        }
+        _ = PollAsync(_token);
+    }
+
+    // Reference [41]: Microsoft. PeriodicTimer Class. Microsoft Learn.
+    //   https://learn.microsoft.com/dotnet/api/system.threading.periodictimer
+    private async Task PollAsync(CancellationToken token)
+    {
+        using var timer = new PeriodicTimer(Refresh);
+        try
+        {
+            while (await timer.WaitForNextTickAsync(token))
+            {
+                await LoadAsync(token);
+                StateHasChanged();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Page left.
+        }
+    }
+
+    // Called by the poll and by every click, search and what-if change, so two loads can be in
+    // flight at once. Each takes a version number and only the newest one applies its result:
+    // a slow poll that started before a click must not paint the old route back over the new one.
+    private async Task LoadAsync(CancellationToken token)
+    {
+        var version = ++_loadVersion;
+        var tracked = _tracked;
+        var whatIf = _whatIf.ToList();
+
+        try
+        {
+            // The requests are independent, so send them together.
+            var mesh = Gateway.GetMeshAsync(token);
+            var mst = Gateway.GetMstAsync(whatIf, token);
+            var route = tracked is null ? Task.FromResult<RouteReport?>(null) : Gateway.GetRouteAsync(tracked, whatIf, token);
+            var (meshView, tree, report) = (await mesh, await mst, await route);
+
+            if (version != _loadVersion) return;
+
+            if (meshView is null || tree is null)
+            {
+                _error = "Gateway unreachable - showing the last mesh received.";
+                return;
+            }
+
+            // The tracked node was deleted from the registry since it was picked.
+            if (tracked is not null && report is null && meshView.Vertices.All(v => v.Id != tracked))
+            {
+                _tracked = null;
+                _searchError = $"{Name(tracked)} is no longer on the mesh.";
+            }
+
+            _route = _tracked is null ? null : report;
+            _whatIf.RemoveAll(id => meshView.Vertices.All(v => v.Id != id));
+            _mesh = meshView;
+            _mst = tree;
+            _names = meshView.Vertices.ToDictionary(v => v.Id, v => v.Name, StringComparer.OrdinalIgnoreCase);
+            _updated = DateTimeOffset.UtcNow;
+            _error = null;
+        }
+        catch (OperationCanceledException)
+        {
+            // Page left mid-request.
+        }
+    }
+
+    // ---- route tracker ------------------------------------------------------
+
+    private async Task TrackAsync(string id)
+    {
+        _tracked = id;
+        _search = id;
+        _searchError = null;
+        _route = null;
+        await LoadAsync(_token);
+    }
+
+    private async Task SearchAsync()
+    {
+        var id = Resolve(_search);
+        if (id is null)
+        {
+            _searchError = string.IsNullOrWhiteSpace(_search)
+                ? "Type a MAC or a node name."
+                : $"No node matches \"{_search.Trim()}\" - or it matches more than one; add more of the MAC.";
+            return;
+        }
+
+        await TrackAsync(id);
+    }
+
+    /// <summary>
+    /// Finds the node the operator meant: a full MAC in any spelling (colons or dashes, any
+    /// case), the end of a MAC as printed on the map ("04:7F"), or part of a name. Null unless
+    /// exactly one node matches, so a vague search never silently picks the wrong device.
+    /// </summary>
+    private string? Resolve(string input)
+    {
+        var text = input.Trim();
+        if (text.Length == 0) return null;
+
+        var mac = text.Replace('-', ':').ToUpperInvariant();
+        var nodes = Nodes.ToList();
+
+        var exact = nodes.FirstOrDefault(n => n.Id == mac);
+        if (exact is not null) return exact.Id;
+
+        var bySuffix = nodes.Where(n => n.Id.EndsWith(mac, StringComparison.Ordinal)).ToList();
+        if (bySuffix.Count == 1) return bySuffix[0].Id;
+
+        var byName = nodes.Where(n => n.Name.Contains(text, StringComparison.OrdinalIgnoreCase)).ToList();
+        return byName.Count == 1 ? byName[0].Id : null;
+    }
+
+    private async Task StopTrackingAsync()
+    {
+        _tracked = null;
+        _route = null;
+        _search = "";
+        _searchError = null;
+        await LoadAsync(_token);
+    }
+
+    private async Task AddWhatIfAsync(ChangeEventArgs e)
+    {
+        if (e.Value?.ToString() is not { Length: > 0 } id || _whatIf.Contains(id)) return;
+        _whatIf.Add(id);
+        await LoadAsync(_token);
+    }
+
+    private async Task RemoveWhatIfAsync(string id)
+    {
+        _whatIf.Remove(id);
+        await LoadAsync(_token);
+    }
+
+    private async Task ClearWhatIfAsync()
+    {
+        _whatIf.Clear();
+        await LoadAsync(_token);
+    }
+
+    private static IReadOnlySet<string> FailedIds(RouteReport r) => r.FailedOnUsual.Select(v => v.Id).ToHashSet();
+
+    private static string StatusTag(RouteStatus status) => status switch
+    {
+        RouteStatus.Online => "ok",
+        RouteStatus.Rerouted => "warn",
+        RouteStatus.Down => "crit",
+        _ => "warn"
+    };
+
+    private string StatusText(RouteReport r) => r.Status switch
+    {
+        RouteStatus.Online => "Getting through on its usual power-efficient route.",
+        RouteStatus.Rerouted => $"{string.Join(" and ", r.FailedOnUsual.Select(v => v.Name))} on its usual route is down, so the mesh has healed around it: packets now go to {Name(r.NextHop!)} instead.",
+        RouteStatus.Down => "This node itself is silent. Its usual route is shown for reference.",
+        _ => "This node is running, but every path it had runs through a down node, so nothing it sends can reach the gateway."
+    };
+
+    // How the MST route compares with the cheapest this one node could ever get (Dijkstra).
+    private static string CheapestNote(RouteReport r)
+    {
+        if (r.Efficient is null || r.CheapestCost is not { } best) return "";
+        var extra = r.Efficient.TotalCost - best;
+        return extra < 0.01
+            ? " - the cheapest route possible for this node"
+            : $" - {extra.ToString("0.0", CultureInfo.InvariantCulture)} more than its cheapest possible ({Cost(best)}), the price of sharing one tree";
+    }
+
+    private string Name(string id) => _names.GetValueOrDefault(id, id);
+
+    private static string Cost(double? value) => value?.ToString("0.0", CultureInfo.InvariantCulture) ?? "-";
+
+    private string Saving => _mst is { BfsTreeCost: > 0 }
+        ? (1 - _mst.TotalCost / _mst.BfsTreeCost).ToString("P0", CultureInfo.InvariantCulture)
+        : "-";
+
+    public void Dispose()
+    {
+        _cts.Cancel();
+        _cts.Dispose();
+    }
+}
