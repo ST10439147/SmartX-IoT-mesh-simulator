@@ -27,10 +27,10 @@ internal static class SelfCheckRunner
             foreach (var line in SelfCheck.Run())
                 Console.WriteLine($"  ok  {line}");
 
-            foreach (var line in RunCryptoChecks())
+            foreach (var line in await RunCryptoChecksAsync())
                 Console.WriteLine($"  ok  {line}");
 
-            foreach (var line in RunQueueChecks())
+            foreach (var line in await RunQueueChecksAsync())
                 Console.WriteLine($"  ok  {line}");
 
             foreach (var line in RunCommandChecks())
@@ -78,7 +78,7 @@ internal static class SelfCheckRunner
     //   https://owasp.org/www-community/attacks/Path_Traversal
     // Reference [28]: Microsoft. AesGcm Class. Microsoft Learn.
     //   https://learn.microsoft.com/dotnet/api/system.security.cryptography.aesgcm
-    private static IEnumerable<string> RunCryptoChecks()
+    private static async Task<IEnumerable<string>> RunCryptoChecksAsync()
     {
         var log = new List<string>();
         var key = RandomNumberGenerator.GetBytes(ChunkedAesGcm.KeySize);
@@ -90,12 +90,12 @@ internal static class SelfCheckRunner
             var plaintext = RandomNumberGenerator.GetBytes(size);
 
             using var encrypted = new MemoryStream();
-            var written = ChunkedAesGcm.EncryptAsync(new MemoryStream(plaintext), encrypted, key).GetAwaiter().GetResult();
+            var written = await ChunkedAesGcm.EncryptAsync(new MemoryStream(plaintext), encrypted, key);
             Assert(written == size, $"encrypt should consume all {size} plaintext bytes, reported {written}");
 
             encrypted.Position = 0;
             using var decrypted = new MemoryStream();
-            ChunkedAesGcm.DecryptAsync(encrypted, decrypted, key).GetAwaiter().GetResult();
+            await ChunkedAesGcm.DecryptAsync(encrypted, decrypted, key);
 
             Assert(decrypted.ToArray().SequenceEqual(plaintext), $"round trip failed at {size} bytes");
             Assert(encrypted.Length > size, "ciphertext should carry its header and tags");
@@ -107,31 +107,31 @@ internal static class SelfCheckRunner
         var payload = Encoding.UTF8.GetBytes("sensor=A4:CF:12:9B:04:7E; calibration=1.042");
         using (var sealed1 = new MemoryStream())
         {
-            ChunkedAesGcm.EncryptAsync(new MemoryStream(payload), sealed1, key).GetAwaiter().GetResult();
+            await ChunkedAesGcm.EncryptAsync(new MemoryStream(payload), sealed1, key);
 
             var bytes = sealed1.ToArray();
             bytes[^1] ^= 0xFF;   // flip a bit in the ciphertext
 
-            Assert(Throws(() => ChunkedAesGcm.DecryptAsync(new MemoryStream(bytes), Stream.Null, key).GetAwaiter().GetResult()),
+            Assert(await ThrowsAsync(() => ChunkedAesGcm.DecryptAsync(new MemoryStream(bytes), Stream.Null, key)),
                 "a flipped ciphertext bit must fail authentication");
         }
 
         using (var sealed2 = new MemoryStream())
         {
-            ChunkedAesGcm.EncryptAsync(new MemoryStream(payload), sealed2, key).GetAwaiter().GetResult();
+            await ChunkedAesGcm.EncryptAsync(new MemoryStream(payload), sealed2, key);
 
             var truncated = sealed2.ToArray()[..^8];
-            Assert(Throws(() => ChunkedAesGcm.DecryptAsync(new MemoryStream(truncated), Stream.Null, key).GetAwaiter().GetResult()),
+            Assert(await ThrowsAsync(() => ChunkedAesGcm.DecryptAsync(new MemoryStream(truncated), Stream.Null, key)),
                 "a truncated attachment must be rejected");
         }
 
         using (var sealed3 = new MemoryStream())
         {
-            ChunkedAesGcm.EncryptAsync(new MemoryStream(payload), sealed3, key).GetAwaiter().GetResult();
+            await ChunkedAesGcm.EncryptAsync(new MemoryStream(payload), sealed3, key);
             sealed3.Position = 0;
 
             var wrongKey = RandomNumberGenerator.GetBytes(ChunkedAesGcm.KeySize);
-            Assert(Throws(() => ChunkedAesGcm.DecryptAsync(sealed3, Stream.Null, wrongKey).GetAwaiter().GetResult()),
+            Assert(await ThrowsAsync(() => ChunkedAesGcm.DecryptAsync(sealed3, Stream.Null, wrongKey)),
                 "the wrong key must not decrypt an attachment");
         }
 
@@ -154,7 +154,7 @@ internal static class SelfCheckRunner
         return log;
     }
     //----------------------------------------------------------------------------------------------------------------------//
-    private static IEnumerable<string> RunQueueChecks()
+    private static async Task<IEnumerable<string>> RunQueueChecksAsync()
     {
         var log = new List<string>();
         var queue = new IngestQueue();
@@ -163,7 +163,7 @@ internal static class SelfCheckRunner
         Assert(queue.Depth == 5, "five packets should be waiting");
 
         var order = new List<double>();
-        while (queue.Depth > 0) order.Add(queue.DequeueAsync().AsTask().GetAwaiter().GetResult().Value);
+        while (queue.Depth > 0) order.Add((await queue.DequeueAsync()).Value);
         Assert(order.SequenceEqual([1, 2, 3, 4, 5]), $"expected FIFO 1..5 but got {string.Join(",", order)}");
 
         // Backed-up normal lane, then criticals arriving late: they must leave first,
@@ -176,7 +176,7 @@ internal static class SelfCheckRunner
         Assert(queue.Depth == 4 && queue.CriticalDepth == 3, "criticals wait in their own lane");
 
         order.Clear();
-        while (queue.Depth + queue.CriticalDepth > 0) order.Add(queue.DequeueAsync().AsTask().GetAwaiter().GetResult().Value);
+        while (queue.Depth + queue.CriticalDepth > 0) order.Add((await queue.DequeueAsync()).Value);
         Assert(order.SequenceEqual([5, 4, 6, 1, 2, 3, 7]), $"expected 5,4,6,1,2,3,7 but got {string.Join(",", order)}");
 
         // The processing trail keeps the order the worker reported, and stays bounded.
@@ -751,11 +751,11 @@ internal static class SelfCheckRunner
         return log;
     }
     //----------------------------------------------------------------------------------------------------------------------//
-    private static bool Throws(Action action)
+    private static async Task<bool> ThrowsAsync(Func<Task> action)
     {
         try
         {
-            action();
+            await action();
             return false;
         }
         catch (CryptographicException)

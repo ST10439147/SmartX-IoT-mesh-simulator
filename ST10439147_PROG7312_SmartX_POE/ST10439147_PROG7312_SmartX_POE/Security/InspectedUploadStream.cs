@@ -59,8 +59,9 @@ public sealed class InspectedUploadStream(ReadOnlyMemory<byte> head, Stream inne
         return read;
     }
     //----------------------------------------------------------------------------------------------------------------------//
+    // Async only: a blocking read on the request thread is exactly what this class exists to avoid.
     public override int Read(byte[] buffer, int offset, int count)
-        => ReadAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
+        => throw new NotSupportedException("Use ReadAsync.");
 
     public override bool CanRead => true;
     public override bool CanSeek => false;
