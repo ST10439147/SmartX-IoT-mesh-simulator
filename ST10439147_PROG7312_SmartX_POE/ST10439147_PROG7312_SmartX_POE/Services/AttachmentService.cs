@@ -28,7 +28,7 @@ public sealed class AttachmentService
     private readonly TelemetryStore _store;
     private readonly ILogger<AttachmentService> _logger;
     private readonly string _root;
-    private readonly byte[] _key;
+    private readonly Task<byte[]> _key;
 //----------------------------------------------------------------------------------------------------------------------//
     public AttachmentService(TelemetryStore store, IConfiguration config, ILogger<AttachmentService> logger)
     {
@@ -38,7 +38,8 @@ public sealed class AttachmentService
         _root = Path.GetFullPath(config["SmartX:AttachmentRoot"] ?? "storage/attachments");
         Directory.CreateDirectory(_root);
 
-        _key = LoadOrCreateKey(config, logger);
+        // Started here, awaited on first use, so the constructor never blocks on disk.
+        _key = LoadOrCreateKeyAsync(config, logger);
     }
 
     public sealed record UploadResult(bool Ok, AttachmentInfo? Attachment, string? Error);
@@ -111,7 +112,7 @@ public sealed class AttachmentService
                 path, FileMode.CreateNew, FileAccess.Write, FileShare.None,
                 bufferSize: 64 * 1024, useAsync: true);
 
-            var plaintextBytes = await ChunkedAesGcm.EncryptAsync(source, destination, _key, ct);
+            var plaintextBytes = await ChunkedAesGcm.EncryptAsync(source, destination, await _key, ct);
             await destination.FlushAsync(ct);
 
             var info = new AttachmentInfo(
@@ -149,7 +150,7 @@ public sealed class AttachmentService
         if (!File.Exists(path)) return false;
 
         await using var source = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, useAsync: true);
-        await ChunkedAesGcm.DecryptAsync(source, destination, _key, ct);
+        await ChunkedAesGcm.DecryptAsync(source, destination, await _key, ct);
         return true;
     }
 
@@ -174,7 +175,7 @@ public sealed class AttachmentService
     /// a secret store - never appsettings.json in the repo. For a local run the gateway
     /// generates one and keeps it beside the attachments so restarts can still read them.
     /// </summary>
-    private static byte[] LoadOrCreateKey(IConfiguration config, ILogger logger)
+    private static async Task<byte[]> LoadOrCreateKeyAsync(IConfiguration config, ILogger logger)
     {
         var configured = config["SmartX:AttachmentKey"];
         if (!string.IsNullOrWhiteSpace(configured))
@@ -188,10 +189,10 @@ public sealed class AttachmentService
         var keyPath = Path.GetFullPath(config["SmartX:AttachmentKeyPath"] ?? "storage/attachment.key");
         Directory.CreateDirectory(Path.GetDirectoryName(keyPath)!);
 
-        if (File.Exists(keyPath)) return File.ReadAllBytes(keyPath);
+        if (File.Exists(keyPath)) return await File.ReadAllBytesAsync(keyPath);
 
         var generated = RandomNumberGenerator.GetBytes(ChunkedAesGcm.KeySize);
-        File.WriteAllBytes(keyPath, generated);
+        await File.WriteAllBytesAsync(keyPath, generated);
         logger.LogWarning("No SmartX:AttachmentKey configured. Generated a development key at {Path} - set the config value in production.", keyPath);
 
         return generated;
