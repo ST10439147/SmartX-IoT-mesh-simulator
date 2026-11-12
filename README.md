@@ -1261,7 +1261,7 @@ fast; the client already downsamples the chart.
 
 # References
 
-References follow the IEEE style. Numbers match the `// Reference [N]` comments in the source. [1]–[57] are also listed in section 27 of [HOW_IT_WORKS.md](HOW_IT_WORKS.md); [58]–[67] were added for the final PoE.
+References follow the IEEE style. Numbers match the `// Reference [N]` comments in the source. [1]–[57] are also listed in section 27 of [HOW_IT_WORKS.md](HOW_IT_WORKS.md); [58]–[67] were added for the final PoE. [68]–[80] support the Technology Recommendations in the project report (they are not cited in the source).
 
 [1] Microsoft, "Generics in C#," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/csharp/fundamentals/types/generics  
 [2] Microsoft, "How to serialize and deserialize JSON using System.Text.Json," Microsoft Learn. Accessed: Oct. 18, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/standard/serialization/system-text-json/how-to  
@@ -1330,3 +1330,16 @@ References follow the IEEE style. Numbers match the `// Reference [N]` comments 
 [65] R. C. Prim, "Shortest connection networks and some generalizations," *Bell System Technical Journal*, vol. 36, no. 6, pp. 1389–1401, 1957.  
 [66] E. W. Dijkstra, "A note on two problems in connexion with graphs," *Numerische Mathematik*, vol. 1, pp. 269–271, 1959.  
 [67] T. S. Rappaport, *Wireless Communications: Principles and Practice*, 2nd ed. Upper Saddle River, NJ, USA: Prentice Hall, 2002.  
+[68] Microsoft, "What is Azure IoT Hub?," Microsoft Learn. Accessed: Nov. 12, 2026. [Online]. Available: https://learn.microsoft.com/azure/iot-hub/iot-concepts-and-iot-hub  
+[69] MQTTnet contributors, "MQTTnet: high performance .NET library for MQTT," GitHub. Accessed: Nov. 12, 2026. [Online]. Available: https://github.com/dotnet/MQTTnet  
+[70] Timescale, "TimescaleDB documentation." Accessed: Nov. 12, 2026. [Online]. Available: https://docs.timescale.com/  
+[71] InfluxData, "InfluxDB documentation." Accessed: Nov. 12, 2026. [Online]. Available: https://docs.influxdata.com/  
+[72] Microsoft, "What is Azure SignalR Service?," Microsoft Learn. Accessed: Nov. 12, 2026. [Online]. Available: https://learn.microsoft.com/azure/azure-signalr/signalr-overview  
+[73] Microsoft, "Azure Container Apps overview," Microsoft Learn. Accessed: Nov. 12, 2026. [Online]. Available: https://learn.microsoft.com/azure/container-apps/overview  
+[74] GitHub, "GitHub Actions documentation." Accessed: Nov. 12, 2026. [Online]. Available: https://docs.github.com/actions  
+[75] Microsoft, ".NET observability with OpenTelemetry," Microsoft Learn. Accessed: Nov. 12, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/core/diagnostics/observability-with-otel  
+[76] Microsoft, "ML.NET documentation," Microsoft Learn. Accessed: Nov. 12, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/machine-learning/  
+[77] Home Assistant, "Home Assistant." Accessed: Nov. 12, 2026. [Online]. Available: https://www.home-assistant.io/  
+[78] Microsoft, "Overview of authentication in ASP.NET Core," Microsoft Learn. Accessed: Nov. 12, 2026. [Online]. Available: https://learn.microsoft.com/aspnet/core/security/authentication/  
+[79] Microsoft, "Build resilient HTTP apps: Key development patterns," Microsoft Learn. Accessed: Nov. 12, 2026. [Online]. Available: https://learn.microsoft.com/dotnet/core/resilience/http-resilience  
+[80] Microsoft, "Azure Key Vault documentation," Microsoft Learn. Accessed: Nov. 12, 2026. [Online]. Available: https://learn.microsoft.com/azure/key-vault/  
