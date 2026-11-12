@@ -454,7 +454,7 @@ same entry.
 
 **On the dashboard** (panel: *Device registry*):
 
-1. Watch *Lookups* climb as the simulated mesh publishes. *Devices* stays at 12.
+1. Watch *Lookups* climb as the simulated mesh publishes. *Devices* stays at 13.
 2. Type `a4-cf-12-9b-04-7e` (dashes, lower case) and click **Look up**. It finds
    *Soil Moisture North* under the id `A4:CF:12:9B:04:7E`.
 3. Type `00:00:00:00:00:00` and click **Look up**. Nothing is found and *Misses* goes up
@@ -1244,8 +1244,9 @@ post to the same endpoint and nothing downstream changes.
 Gateway state is **in memory** and resets on restart: registered nodes, history and alerts
 are lost, and the 13 seeded nodes come back. Uploaded files stay on disk, encrypted, but
 their metadata is in memory too, so after a restart the API no longer lists or serves
-them. What the predictive engine has learned is in memory as well, so its counters start
-empty after a restart and the moisture-then-pump pattern has to be taught again.
+them. What the predictive engine has learned is the exception: its counters are saved to
+`storage/predictions.json` with async file I/O and reloaded on the next start, so the
+moisture-then-pump pattern survives a restart (`POST /api/predictions/reset` clears it).
 
 The **mesh links** are simulated too: `MeshSimulator.LinkMesh` reports each node's
 neighbours and RSSI the way a real ESP-WIFI-MESH or Zigbee node would. A node registered
